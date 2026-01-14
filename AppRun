@@ -1,0 +1,26 @@
+#!/bin/bash
+HERE="$(dirname "$(readlink -f "${0}")")"
+
+# Essential environment variables
+export PATH="$HERE/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+
+# GStreamer configuration
+export GST_PLUGIN_PATH="$HERE/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SYSTEM_PATH="$HERE/usr/lib/gstreamer-1.0"
+export GST_REGISTRY="$HERE/usr/lib/gstreamer-1.0/registry.bin"
+
+# Qt configuration
+export QT_PLUGIN_PATH="$HERE/usr/lib/x86_64-linux-gnu/qt6/plugins"
+export QML2_IMPORT_PATH="$HERE/usr/lib/x86_64-linux-gnu/qt6/qml"
+
+# Debugging output
+echo "=== Environment Debug ==="
+echo "AppDir: $HERE"
+echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
+echo "QT_PLUGIN_PATH: $QT_PLUGIN_PATH"
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo "========================="
+
+# Launch application
+exec "$HERE/usr/bin/JoystickIdentifier" "$@"

@@ -1,0 +1,53 @@
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    ninja-build \
+    qt6-base-dev \
+    qt6-multimedia-dev \
+    libsdl2-dev \
+    libx11-dev \
+    libgl1-mesa-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-alsa \
+    gstreamer1.0-pulseaudio \
+    libxcb-xinerama0 \
+    libxkbcommon-x11-0 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    wget \
+    curl \
+    ca-certificates \
+    fuse \
+    file \
+    libqt6svg6-dev \
+    gdb \
+    valgrind \
+    libasan6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symbolic links for Qt tools
+RUN rm -f /usr/bin/qmake && \
+    ln -s /usr/lib/qt6/bin/qmake /usr/bin/qmake
+
+# Install linuxdeploy core
+RUN wget -qO /usr/local/bin/linuxdeploy \
+     https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+    && chmod +x /usr/local/bin/linuxdeploy
+
+# Install the Qt plugin
+RUN wget -qO /usr/local/bin/linuxdeploy-plugin-qt \
+     https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+    && chmod +x /usr/local/bin/linuxdeploy-plugin-qt
+
+
+WORKDIR /project

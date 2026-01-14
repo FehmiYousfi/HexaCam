@@ -1,0 +1,9 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="hexa5.css">styles/hexa5.css</file>
+    <file alias="hexa5.png">icons/hexa5.png</file>
+    <file alias="intro.mp4">videos/hexa5camera.mp4</file>
+    <file alias="intro.gif">videos/intro.gif</file>
+  </qresource>
+</RCC>
+

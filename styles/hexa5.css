@@ -1,0 +1,291 @@
+/* ===== Professional Color Palette ===== */
+/* Primary: #BB86FC (Purple) */
+/* Primary Variant: #3700B3 (Deep Purple) */
+/* Secondary: #03DAC6 (Teal) */
+/* Background: #121212 (Dark Gray) */
+/* Surface: #121212 (Dark Gray) */
+/* Error: #CF6679 (Salmon) */
+/* On Primary: #000000 (Black) */
+/* On Secondary: #000000 (Black) */
+/* On Background: #FFFFFF (White) */
+/* On Surface: #FFFFFF (White) */
+/* On Error: #000000 (Black) */
+
+/* === Base Styles === */
+QWidget {
+    background-color: #121212;        /* Background color */
+    color: #FFFFFF;                   /* On Background color */
+    font-family: 'Segoe UI', 'Roboto', sans-serif;
+    font-size: 10pt;
+    selection-background-color: #BB86FC; /* Primary color */
+    selection-color: #000000;         /* On Primary color */
+}
+
+QMainWindow {
+    background-color: #121212;        /* Background color */
+    border: 1px solid #1F1F1F;        /* Slightly lighter border */
+    border-radius: 8px;
+}
+
+/* === Group Boxes === */
+QGroupBox {
+    border: 1px solid #1F1F1F;        /* Surface border */
+    border-radius: 6px;
+    margin-top: 20px;
+    padding-top: 10px;
+    font-weight: bold;
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 5px 12px;
+    background-color: #3700B3;        /* Primary Variant */
+    color: #FFFFFF;                   /* On Surface color */
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+/* === Section Titles === */
+QLabel[sectionTitle="true"] {
+    font-size: 12pt;
+    font-weight: bold;
+    color: #BB86FC;                   /* Primary color */
+    padding: 8px 0;
+    border-bottom: 1px solid #1F1F1F; /* Surface border */
+}
+
+/* === Buttons === */
+QPushButton, QToolButton {
+    background-color: #3700B3;        /* Primary Variant */
+    color: #FFFFFF;                   /* On Surface color */
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    min-height: 24px;
+    font-weight: 500;
+/*    transition: background 0.3s;*/
+}
+
+QPushButton:hover, QToolButton:hover {
+    background-color: #BB86FC;        /* Primary color */
+    color: #000000;                   /* On Primary color */
+}
+
+QPushButton:pressed, QToolButton:pressed {
+    background-color: #8A57DE;        /* Mid-tone between Primary and Primary Variant */
+    color: #000000;                   /* On Primary color */
+}
+
+QPushButton:disabled, QToolButton:disabled {
+    background-color: #1F1B2D;        /* Disabled state */
+    color: #5D5D5D;
+}
+
+/* === Tabs === */
+QTabWidget::pane {
+    border: 1px solid #1F1F1F;        /* Surface border */
+    background: #1E1E1E;              /* Slightly lighter surface */
+    border-radius: 4px;
+    margin-top: -1px;
+}
+
+QTabBar::tab {
+    background: #1E1E1E;              /* Slightly lighter surface */
+    color: #A0A0A0;                   /* Muted text */
+    padding: 8px 20px;
+    margin: 0 2px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    border-bottom: 2px solid transparent;
+}
+
+QTabBar::tab:selected {
+    background: #121212;              /* Background color */
+    color: #BB86FC;                   /* Primary color */
+    border-bottom: 2px solid #BB86FC; /* Primary color */
+}
+
+QTabBar::tab:hover {
+    color: #FFFFFF;                   /* On Surface color */
+}
+
+/* === Progress Bars === */
+QProgressBar {
+    background: #1E1E1E;              /* Slightly lighter surface */
+    border: 1px solid #1F1F1F;        /* Surface border */
+    border-radius: 4px;
+    text-align: center;
+    color: #FFFFFF;                   /* On Surface color */
+    height: 20px;
+}
+
+QProgressBar::chunk {
+    background: #03DAC6;              /* Secondary color */
+    border-radius: 3px;
+}
+
+/* === Input Fields === */
+QLineEdit, QComboBox, QTextEdit {
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+    border: 1px solid #2D2D2D;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #FFFFFF;                   /* On Surface color */
+    selection-background-color: #BB86FC; /* Primary color */
+    selection-color: #000000;         /* On Primary color */
+}
+
+QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
+    border: 1px solid #BB86FC;        /* Primary color */
+    outline: none;
+}
+
+QComboBox::drop-down {
+    background-color: #3700B3;        /* Primary Variant */
+    border-radius: 4px;
+    width: 20px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+    color: #FFFFFF;                   /* On Surface color */
+    selection-background-color: #BB86FC; /* Primary color */
+    selection-color: #000000;         /* On Primary color */
+    border: 1px solid #BB86FC;        /* Primary color */
+}
+
+/* === Status Bar === */
+QStatusBar {
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+    color: #A0A0A0;                   /* Muted text */
+    border-top: 1px solid #1F1F1F;    /* Surface border */
+    padding: 4px 8px;
+    font-size: 9pt;
+}
+
+/* === Status Indicators === */
+QLabel[status="active"] {
+    color: #03DAC6;                   /* Secondary color */
+    font-weight: bold;
+}
+
+QLabel[status="inactive"] {
+    color: #CF6679;                   /* Error color */
+}
+
+QLabel[status="warning"] {
+    color: #FFA000;                   /* Warning yellow */
+}
+
+/* === Video Display Area === */
+QFrame#videoContainer {
+    background-color: #000000;        /* Pure black for video */
+    border: 2px solid #1F1F1F;        /* Surface border */
+    border-radius: 4px;
+}
+
+/* === Menu Bar === */
+QMenuBar {
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+    color: #FFFFFF;                   /* On Surface color */
+    padding: 4px 0;
+    border-bottom: 1px solid #1F1F1F; /* Surface border */
+}
+
+QMenuBar::item {
+    padding: 4px 12px;
+    background: transparent;
+    border-radius: 4px;
+}
+
+QMenuBar::item:selected {
+    background-color: #3700B3;        /* Primary Variant */
+}
+
+QMenuBar::item:pressed {
+    background-color: #BB86FC;        /* Primary color */
+    color: #000000;                   /* On Primary color */
+}
+
+/* === Context Menus === */
+QMenu {
+    background-color: #1E1E1E;        /* Slightly lighter surface */
+    border: 1px solid #2D2D2D;
+    color: #FFFFFF;                   /* On Surface color */
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #3700B3;        /* Primary Variant */
+}
+
+QMenu::item:pressed {
+    background-color: #BB86FC;        /* Primary color */
+    color: #000000;                   /* On Primary color */
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #2D2D2D;
+    margin: 4px 8px;
+}
+
+/* === Checkboxes and Radio Buttons === */
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #2D2D2D;
+    border-radius: 3px;
+    background: #121212;              /* Background color */
+}
+
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background-color: #BB86FC;        /* Primary color */
+    border: 1px solid #BB86FC;        /* Primary color */
+}
+
+QCheckBox::indicator:checked:hover, QRadioButton::indicator:checked:hover {
+    background-color: #8A57DE;        /* Mid-tone purple */
+}
+
+QRadioButton::indicator {
+    border-radius: 8px;               /* Circular for radio buttons */
+}
+
+/* === Scrollbars === */
+QScrollBar:vertical {
+    background: #121212;              /* Background color */
+    width: 12px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #2D2D2D;
+    min-height: 20px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #3D3D3D;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+    background: none;
+}
+
+/* === Tooltips === */
+QToolTip {
+    background-color: #3700B3;        /* Primary Variant */
+    color: #FFFFFF;                   /* On Surface color */
+    border: 1px solid #BB86FC;        /* Primary color */
+    border-radius: 4px;
+    padding: 6px;
+}

@@ -1,0 +1,73 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# Compiled object files
+*.o
+*.obj
+
+# Compiled executables
+*.exe
+*.out
+*.app
+
+# CMake generated files
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+
+# Qt generated files
+*.pro.user*
+*.qmlc
+*.jsc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Deployment files
+deploy/*.tar.gz
+deploy/*.zip
+deploy/*.deb
+deploy/*.rpm
+
+# Video files (for testing)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.264
+*.h264
+
+# Configuration files (may contain sensitive data)
+*.json
+*.config
+*.cfg
+
+# Permission scripts (may contain sensitive data)
+grant-permissions.sh
