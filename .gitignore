@@ -49,24 +49,5 @@ Thumbs.db
 *.temp
 *.backup
 
-# Deployment files
-deploy/*.tar.gz
-deploy/*.zip
-deploy/*.deb
-deploy/*.rpm
 
-# Video files (for testing)
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.264
-*.h264
 
-# Configuration files (may contain sensitive data)
-*.json
-*.config
-*.cfg
-
-# Permission scripts (may contain sensitive data)
-grant-permissions.sh
