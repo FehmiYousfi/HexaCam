@@ -252,14 +252,14 @@ void ContinuousPingWatcher::addHost(const QString& name, const QString& host) {
         hosts[name] = hostInfo;
     }
     
-    qDebug() << "[PING_WATCHER] Added host" << name << "at" << host;
+    LOG_PING_WATCHER() << "Added host" << name << "at" << host;
 }
 
 void ContinuousPingWatcher::removeHost(const QString& name) {
     QMutexLocker locker(&hostsMutex);
     
     if (hosts.remove(name)) {
-        qDebug() << "[PING_WATCHER] Removed host" << name;
+        LOG_PING_WATCHER() << "Removed host" << name;
     }
 }
 

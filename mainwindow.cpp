@@ -133,21 +133,21 @@ MainWindow::MainWindow(QWidget *parent)
         connect(ui->videoSourceComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
             // Skip during initialization to prevent race condition
             if (isInitializing) {
-                qDebug() << "[VIDEO_SOURCE] Dropdown changed during initialization - skipping to prevent race condition";
+                LOG_VIDEO_SOURCE() << "Dropdown changed during initialization - skipping to prevent race condition";
                 return;
             }
             
             QString selectedSource = ui->videoSourceComboBox->currentText();
-            qDebug() << "[VIDEO_SOURCE] Dropdown changed - index:" << index << "source:" << selectedSource;
+            LOG_VIDEO_SOURCE() << "Dropdown changed - index:" << index << "source:" << selectedSource;
             
             // Update videoSource in JSON config directly
-            qDebug() << "[VIDEO_SOURCE] Updating videoSource in config...";
+            LOG_VIDEO_SOURCE() << "Updating videoSource in config...";
             updateVideoSourceInConfig();
             
             // Apply the new configuration with proper shutdown/restart sequence
-            qDebug() << "[VIDEO_SOURCE] Applying new video source with proper shutdown/restart...";
+            LOG_VIDEO_SOURCE() << "Applying new video source with proper shutdown/restart...";
             applyConfig();
-            qDebug() << "[VIDEO_SOURCE] Video source workflow completed";
+            LOG_VIDEO_SOURCE() << "Video source workflow completed";
         });
     }
 
@@ -2274,7 +2274,7 @@ QMap<QString, QString> MainWindow::loadAllCameraIps() const
         }
     }
     
-    qDebug() << "[IP_WATCHDOG] Found" << cameraIps.size() << "camera IPs:" << cameraIps;
+    LOG_IP_WATCHDOG() << "Found" << cameraIps.size() << "camera IPs:" << cameraIps;
     return cameraIps;
 }
 
@@ -2312,7 +2312,7 @@ void MainWindow::refreshCameraStatus() {
 }
 
 void MainWindow::refreshAllCameraStatus() {
-    qDebug() << "[IP_WATCHDOG] Starting comprehensive IP monitoring for all cameras";
+    LOG_IP_WATCHDOG() << "Starting comprehensive IP monitoring for all cameras";
     
     // Use the continuous ping watcher instead of one-time pings
     initializePingWatcher();
@@ -2992,7 +2992,7 @@ void MainWindow::onConnectivityScoreUpdated(const QString& name, const HostConne
         statusBar()->showMessage(statusBarMsg, 5000);
     }
     
-    qDebug() << "[UI_STATUS] Updated" << name << "connectivity display:"
+    LOG_UI_STATUS() << "Updated" << name << "connectivity display:"
              << "Score:" << score.overallScore 
              << "Reachable:" << score.isReachable
              << "RTT:" << score.currentRtt;
@@ -3012,7 +3012,7 @@ void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostCo
     
     if (shouldShutdown && !currentlyShutdown) {
         // Score dropped below threshold - shut down video
-        qDebug() << "[VIDEO_SHUTDOWN] Camera" << name << "score" << score.overallScore 
+        LOG_VIDEO_SHUTDOWN() << "Camera" << name << "score" << score.overallScore 
                  << "<" << LOW_CONNECTIVITY_THRESHOLD << "% - shutting down video display";
         
         videoShutdownStates[name] = true;
@@ -3035,7 +3035,7 @@ void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostCo
         
     } else if (!shouldShutdown && currentlyShutdown) {
         // Score recovered above threshold - restore video
-        qDebug() << "[VIDEO_RESTORE] Camera" << name << "score" << score.overallScore 
+        LOG_VIDEO_RESTORE() << "Camera" << name << "score" << score.overallScore 
                  << ">=" << LOW_CONNECTIVITY_THRESHOLD << "% - restoring video display";
         
         videoShutdownStates[name] = false;
@@ -3060,10 +3060,10 @@ void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostCo
 }
 
 void MainWindow::updateConnectivityDisplay() {
-    qDebug() << "[UI_STATUS] Starting connectivity display update";
+    LOG_UI_STATUS() << "Starting connectivity display update";
     
     if (!pingWatcher) {
-        qDebug() << "[UI_STATUS] Ping watcher not initialized, showing default status";
+        LOG_UI_STATUS() << "Ping watcher not initialized, showing default status";
         if (ui->lineEditCameraStatus) {
             ui->lineEditCameraStatus->setText("Initializing connectivity monitor...");
             ui->lineEditCameraStatus->setStyleSheet("color: #ffaa00; font-weight: bold;");
@@ -3075,10 +3075,10 @@ void MainWindow::updateConnectivityDisplay() {
     // Get all configured camera IPs
     QMap<QString, QString> cameraIps = loadAllCameraIps();
     
-    qDebug() << "[UI_STATUS] Found" << cameraIps.size() << "camera configurations";
+    LOG_UI_STATUS() << "Found" << cameraIps.size() << "camera configurations";
     
     if (cameraIps.isEmpty()) {
-        qDebug() << "[UI_STATUS] No cameras configured, showing empty status";
+        LOG_UI_STATUS() << "No cameras configured, showing empty status";
         if (ui->lineEditCameraStatus) {
             ui->lineEditCameraStatus->setText("No cameras configured");
             ui->lineEditCameraStatus->setStyleSheet("color: #ffaa00; font-weight: bold;");
@@ -3096,11 +3096,11 @@ void MainWindow::updateConnectivityDisplay() {
         QString cameraType = it.key();
         QString cameraIp = it.value();
         
-        qDebug() << "[UI_STATUS] Checking status for" << cameraType << "at" << cameraIp;
+        LOG_UI_STATUS() << "Checking status for" << cameraType << "at" << cameraIp;
         
         HostConnectivityScore score = pingWatcher->getConnectivityScore(cameraType);
         
-        qDebug() << "[UI_STATUS]" << cameraType << "score:" << score.overallScore 
+        LOG_UI_STATUS() << cameraType << "score:" << score.overallScore 
                  << "reachable:" << score.isReachable 
                  << "totalPings:" << score.totalPings;
         
@@ -3170,12 +3170,12 @@ void MainWindow::updateConnectivityDisplay() {
         ui->lineEditCameraStatus->setText(summaryText);
         ui->lineEditCameraStatus->setStyleSheet(summaryStyle);
         ui->lineEditCameraStatus->setToolTip(tooltip);
-        qDebug() << "[UI_STATUS] Display updated with text:" << summaryText;
+        LOG_UI_STATUS() << "Display updated with text:" << summaryText;
     } else {
-        qDebug() << "[UI_STATUS] ERROR: lineEditCameraStatus is null!";
+        LOG_UI_STATUS() << "ERROR: lineEditCameraStatus is null!";
     }
     
-    qDebug() << "[UI_STATUS] Connectivity summary updated:"
+    LOG_UI_STATUS() << "Connectivity summary updated:"
              << "Reachable:" << reachableCount << "/" << totalCount
              << "Display:" << summaryText;
     

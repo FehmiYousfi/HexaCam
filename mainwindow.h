@@ -1,6 +1,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "logging_config.h"
 #include <QtWidgets/QMainWindow>
 #include <QtCore/QMutex>
 #include <QtCore/QTimer>

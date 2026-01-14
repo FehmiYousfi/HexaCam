@@ -1,6 +1,7 @@
 #ifndef PING_H
 #define PING_H
 
+#include "logging_config.h"
 #include <QtCore/QObject>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
