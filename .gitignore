@@ -47,7 +47,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-*.bak
 *.backup
 
 # Deployment files
