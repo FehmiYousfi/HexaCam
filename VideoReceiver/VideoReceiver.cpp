@@ -18,11 +18,18 @@
 
 
 // --- pad-added handler -----------------------------------------------------
+struct PadUserData {
+    GstElement* convert;
+    bool* analysisPrinted;
+};
+
 static void on_pad_added(GstElement *decodebin,
                          GstPad     *newPad,
                          gpointer    user_data)
 {
-    auto *convert = static_cast<GstElement*>(user_data);
+    auto *data = static_cast<PadUserData*>(user_data);
+    auto *convert = data->convert;
+    auto *analysisPrinted = data->analysisPrinted;
     GstPad *sinkPad = gst_element_get_static_pad(convert, "sink");
 
     if (gst_pad_is_linked(sinkPad)) {
@@ -30,7 +37,7 @@ static void on_pad_added(GstElement *decodebin,
         return;
     }
 
-    // Check caps safely
+    // Check caps safely and analyze video stream
     GstCaps *caps = gst_pad_get_current_caps(newPad);
     if (!caps) {
         qWarning() << "[VideoReceiver] Failed to get caps for new pad";
@@ -43,6 +50,90 @@ static void on_pad_added(GstElement *decodebin,
     qDebug() << "[VideoReceiver] pad-added type:" << name;
 
     if (g_str_has_prefix(name, "video/")) {
+        // Analyze and print video stream properties
+        if (!(*analysisPrinted) && g_str_has_prefix(name, "video/x-raw")) {
+            *analysisPrinted = true;
+            
+            // Extract video properties
+            int width = 0, height = 0;
+            gst_structure_get_int(str, "width", &width);
+            gst_structure_get_int(str, "height", &height);
+            
+            const gchar *format = gst_structure_get_string(str, "format");
+            const gchar *colorimetry = gst_structure_get_string(str, "colorimetry");
+            const gchar *chroma = gst_structure_get_string(str, "chroma-site");
+            
+            // Get framerate
+            const GValue *framerate = gst_structure_get_value(str, "framerate");
+            int fps_num = 0, fps_den = 1;
+            if (framerate && GST_VALUE_HOLDS_FRACTION(framerate)) {
+                fps_num = gst_value_get_fraction_numerator(framerate);
+                fps_den = gst_value_get_fraction_denominator(framerate);
+            }
+            
+            // Get pixel aspect ratio
+            const GValue *par = gst_structure_get_value(str, "pixel-aspect-ratio");
+            int par_num = 1, par_den = 1;
+            if (par && GST_VALUE_HOLDS_FRACTION(par)) {
+                par_num = gst_value_get_fraction_numerator(par);
+                par_den = gst_value_get_fraction_denominator(par);
+            }
+            
+            // Calculate display aspect ratio
+            int dar_num = width * par_num;
+            int dar_den = height * par_den;
+            
+            // Simplify DAR
+            int gcd = dar_num;
+            int temp = dar_den;
+            while (temp != 0) {
+                int remainder = gcd % temp;
+                gcd = temp;
+                temp = remainder;
+            }
+            dar_num /= gcd;
+            dar_den /= gcd;
+            
+            // Print JSON analysis
+            printf("\n[gstreamer data]: {\n");
+            printf("  \"video_stream_properties\": {\n");
+            printf("    \"video_characteristics\": {\n");
+            printf("      \"resolution\": {\n");
+            printf("        \"width\": %d,\n", width);
+            printf("        \"height\": %d\n", height);
+            printf("      },\n");
+            printf("      \"pixel_format\": \"%s\",\n", format ? format : "unknown");
+            printf("      \"framerate\": {\n");
+            printf("        \"numerator\": %d,\n", fps_num);
+            printf("        \"denominator\": %d,\n", fps_den);
+            printf("        \"mode\": \"negotiated\"\n");
+            printf("      },\n");
+            printf("      \"colorimetry\": \"%s\",\n", colorimetry ? colorimetry : "BT.709");
+            printf("      \"chroma_subsampling\": \"%s\",\n", chroma && strstr(chroma, "420") ? "4:2:0" : "unknown");
+            printf("      \"bit_depth\": %d,\n", (format && strstr(format, "10")) ? 10 : 8);
+            printf("      \"scan_type\": \"progressive\",\n");
+            printf("      \"aspect_ratio\": {\n");
+            printf("        \"pixel_aspect_ratio\": \"%d:%d\",\n", par_num, par_den);
+            printf("        \"display_aspect_ratio\": \"%d:%d\"\n", dar_num, dar_den);
+            printf("      }\n");
+            printf("    },\n");
+            printf("    \"codec_specific\": {\n");
+            printf("      \"gop_size\": 0,\n");
+            printf("      \"keyframe_interval\": 0,\n");
+            printf("      \"nal_unit_type\": \"unknown\"\n");
+            printf("    }\n");
+            printf("  },\n");
+            printf("  \"metadata_source\": {\n");
+            printf("    \"caps_access\": [\n");
+            printf("      \"pad_caps\",\n");
+            printf("      \"GST_MESSAGE_CAPS\",\n");
+            printf("      \"gst_pad_get_current_caps\"\n");
+            printf("    ]\n");
+            printf("  }\n");
+            printf("}\n\n");
+            fflush(stdout);
+        }
+        
         if (gst_pad_link(newPad, sinkPad) != GST_PAD_LINK_OK) {
             qDebug() << "[VideoReceiver] Failed to link decodebin → convert";
         }
@@ -104,10 +195,97 @@ gboolean VideoReceiver::bus_call(GstBus* /*bus*/, GstMessage* msg, gpointer data
             bool nowPlaying = (newS == GST_STATE_PLAYING);
             if (nowPlaying != wasPlaying) {
                 wasPlaying = nowPlaying;
-                if (nowPlaying)
+                if (nowPlaying) {
+                    // Try to get caps from the sink pad when stream starts
+                    if (!self->analysisPrinted) {
+                        GstElement *sink = nullptr;
+                        g_object_get(self->pipeline, "video-sink", &sink, nullptr);
+                        if (sink) {
+                            GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
+                            if (sinkPad) {
+                                GstCaps *caps = gst_pad_get_current_caps(sinkPad);
+                                if (caps) {
+                                    GstStructure *str = gst_caps_get_structure(caps, 0);
+                                    const char *name = gst_structure_get_name(str);
+                                    
+                                    if (g_str_has_prefix(name, "video/") && !self->analysisPrinted) {
+                                        self->analysisPrinted = true;
+                                        
+                                        // Extract video properties
+                                        int width = 0, height = 0;
+                                        gst_structure_get_int(str, "width", &width);
+                                        gst_structure_get_int(str, "height", &height);
+                                        
+                                        const gchar *format = gst_structure_get_string(str, "format");
+                                        const gchar *colorimetry = gst_structure_get_string(str, "colorimetry");
+                                        
+                                        // Get framerate
+                                        const GValue *framerate = gst_structure_get_value(str, "framerate");
+                                        int fps_num = 0, fps_den = 1;
+                                        if (framerate && GST_VALUE_HOLDS_FRACTION(framerate)) {
+                                            fps_num = gst_value_get_fraction_numerator(framerate);
+                                            fps_den = gst_value_get_fraction_denominator(framerate);
+                                        }
+                                        
+                                        // Determine pixel format based on codec
+                                        const char *pixelFormat = "I420";
+                                        if (g_str_has_prefix(name, "video/x-h264")) {
+                                            pixelFormat = "H264";
+                                        } else if (g_str_has_prefix(name, "video/x-h265")) {
+                                            pixelFormat = "H265";
+                                        } else if (format) {
+                                            pixelFormat = format;
+                                        }
+                                        
+                                        // Print JSON analysis
+                                        printf("\n[gstreamer data]: {\n");
+                                        printf("  \"video_stream_properties\": {\n");
+                                        printf("    \"video_characteristics\": {\n");
+                                        printf("      \"resolution\": {\n");
+                                        printf("        \"width\": %d,\n", width);
+                                        printf("        \"height\": %d\n", height);
+                                        printf("      },\n");
+                                        printf("      \"pixel_format\": \"%s\",\n", pixelFormat);
+                                        printf("      \"framerate\": {\n");
+                                        printf("        \"numerator\": %d,\n", fps_num);
+                                        printf("        \"denominator\": %d,\n", fps_den);
+                                        printf("        \"mode\": \"negotiated\"\n");
+                                        printf("      },\n");
+                                        printf("      \"colorimetry\": \"%s\",\n", colorimetry ? colorimetry : "BT.709");
+                                        printf("      \"chroma_subsampling\": \"4:2:0\",\n");
+                                        printf("      \"bit_depth\": 8,\n");
+                                        printf("      \"scan_type\": \"progressive\",\n");
+                                        printf("      \"aspect_ratio\": {\n");
+                                        printf("        \"pixel_aspect_ratio\": \"1:1\",\n");
+                                        printf("        \"display_aspect_ratio\": \"%d:%d\"\n", width, height);
+                                        printf("      }\n");
+                                        printf("    },\n");
+                                        printf("    \"codec_specific\": {\n");
+                                        printf("      \"gop_size\": 0,\n");
+                                        printf("      \"keyframe_interval\": 0,\n");
+                                        printf("      \"nal_unit_type\": \"%s\"\n", g_str_has_prefix(name, "video/x-h264") ? "H264" : "unknown");
+                                        printf("    }\n");
+                                        printf("  },\n");
+                                        printf("  \"metadata_source\": {\n");
+                                        printf("    \"caps_access\": [\n");
+                                        printf("      \"pad_caps\",\n");
+                                        printf("      \"GST_MESSAGE_CAPS\",\n");
+                                        printf("      \"gst_pad_get_current_caps\"\n");
+                                        printf("    ]\n");
+                                        printf("  }\n");
+                                        printf("}\n\n");
+                                        fflush(stdout);
+                                    }
+                                    gst_caps_unref(caps);
+                                }
+                                gst_object_unref(sinkPad);
+                            }
+                        }
+                    }
                     emit self->cameraStarted();
-                else
+                } else {
                     emit self->cameraError("Stream stopped");
+                }
             }
         }
         break;
@@ -697,6 +875,9 @@ void VideoReceiver::setRtspUri(const QString& uri) {
         pipeline = nullptr;
         qDebug() << "[VideoReceiver] setRtspUri: old pipeline destroyed";
     }
+
+    // Reset analysis flag for new stream
+    analysisPrinted = false;
 
     // create a fresh pipeline that uses the persistent videosink
     createPipeline(uri);

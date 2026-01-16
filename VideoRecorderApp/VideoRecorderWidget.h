@@ -21,6 +21,7 @@ public:
 protected:
     void showEvent(QShowEvent *event) override ;
     void resizeEvent(QResizeEvent *event) override;
+    
 
     // Forward every key press to the MainWindow
     void keyPressEvent(QKeyEvent *event) override {

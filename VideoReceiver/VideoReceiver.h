@@ -34,6 +34,7 @@ private:
     GstElement *appsink    = nullptr;
     GstElement *rtspSrc    = nullptr;
     WId savedWindowId = 0;
+    bool analysisPrinted = false;
 };
 
 #endif // VIDEORECEIVER_H
