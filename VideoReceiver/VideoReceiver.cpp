@@ -275,6 +275,21 @@ gboolean VideoReceiver::bus_call(GstBus* /*bus*/, GstMessage* msg, gpointer data
                                         printf("  }\n");
                                         printf("}\n\n");
                                         fflush(stdout);
+                                        
+                                        // Also emit signal with formatted characteristics for UI
+                                        QString characteristics = QString("Resolution: %1x%2\n")
+                                                                 .arg(width).arg(height);
+                                        characteristics += QString("Pixel Format: %1\n").arg(pixelFormat);
+                                        if (fps_den > 0) {
+                                            characteristics += QString("Framerate: %1/%2 fps\n").arg(fps_num).arg(fps_den);
+                                        }
+                                        characteristics += QString("Colorimetry: %1\n").arg(colorimetry ? colorimetry : "BT.709");
+                                        characteristics += "Chroma Subsampling: 4:2:0\n";
+                                        characteristics += "Bit Depth: 8 bits\n";
+                                        characteristics += "Scan Type: Progressive\n";
+                                        characteristics += QString("Aspect Ratio: %1:%2").arg(width).arg(height);
+                                        
+                                        emit self->videoCharacteristicsUpdated(characteristics);
                                     }
                                     gst_caps_unref(caps);
                                 }
@@ -350,14 +365,34 @@ VideoReceiver::VideoReceiver(QObject *parent)
     GstElement* convert = gst_element_factory_make("videoconvert",  "convert");
 
     // 2) Create the sink and tell playbin to use it
-    videosink = gst_element_factory_make("xvimagesink", "videosink");
+    // Try different video sinks in order of preference
+    const char* sinkNames[] = {"xvimagesink", "glimagesink", "vaapisink", "autovideosink", nullptr};
+    const char** sinkName = sinkNames;
+    
+    while (*sinkName) {
+        videosink = gst_element_factory_make(*sinkName, "videosink");
+        if (videosink) {
+            qDebug() << "[VideoReceiver] Created" << *sinkName << "as videosink";
+            break;
+        }
+        sinkName++;
+    }
+    
     if (!videosink) {
-        qCritical() << "[VideoReceiver] Failed to create xvimagesink";
+        qCritical() << "[VideoReceiver] Failed to create any videosink";
         gst_object_unref(pipeline);
         pipeline = nullptr;
         return;
     }
-    // disable internal clock sync so frames show immediately
+    
+    // Check if the sink supports video overlay
+    if (GST_IS_VIDEO_OVERLAY(videosink)) {
+        qDebug() << "[VideoReceiver]" << *sinkName << "supports video overlay";
+    } else {
+        qDebug() << "[VideoReceiver]" << *sinkName << "does NOT support video overlay";
+    }
+    
+    // disable sync so frames show immediately
     g_object_set(videosink, "sync", FALSE, nullptr);
 
     // 3) Configure playbin: set our RTSP URI, low latency, and video sink
@@ -583,6 +618,12 @@ void VideoReceiver::setWindowId(WId id) {
 
     if (!videosink) {
         qDebug() << "[VideoReceiver] setWindowId: saved handle" << id << " (no videosink yet)";
+        return;
+    }
+
+    // Check if videosink implements the video overlay interface
+    if (!GST_IS_VIDEO_OVERLAY(videosink)) {
+        qDebug() << "[VideoReceiver] setWindowId: videosink does not support video overlay";
         return;
     }
 
@@ -873,6 +914,8 @@ void VideoReceiver::setRtspUri(const QString& uri) {
         }
         gst_object_unref(pipeline);
         pipeline = nullptr;
+        // IMPORTANT: Also clear videosink since it was owned by the pipeline
+        videosink = nullptr;
         qDebug() << "[VideoReceiver] setRtspUri: old pipeline destroyed";
     }
 
@@ -890,14 +933,42 @@ void VideoReceiver::createPipeline(const QString& uri) {
 
     // make sure we have a persistent videosink to attach the Qt window to
     if (!videosink) {
-        // create a persistent xvimagesink (owned by us, not the pipeline)
-        videosink = gst_element_factory_make("xvimagesink", "videosink");
+        // Try different video sinks in order of preference
+        const char* sinkNames[] = {"xvimagesink", "glimagesink", "vaapisink", "autovideosink", nullptr};
+        const char** sinkName = sinkNames;
+        
+        while (*sinkName) {
+            videosink = gst_element_factory_make(*sinkName, "videosink");
+            if (videosink) {
+                qDebug() << "[VideoReceiver] createPipeline: created" << *sinkName;
+                break;
+            }
+            sinkName++;
+        }
+        
         if (!videosink) {
-            qCritical() << "[VideoReceiver] createPipeline: failed to create xvimagesink";
+            qCritical() << "[VideoReceiver] createPipeline: failed to create any videosink";
             return;
         }
+        
+        // Check if the sink supports video overlay
+        if (GST_IS_VIDEO_OVERLAY(videosink)) {
+            qDebug() << "[VideoReceiver] createPipeline:" << *sinkName << "supports video overlay";
+        } else {
+            qDebug() << "[VideoReceiver] createPipeline:" << *sinkName << "does NOT support video overlay";
+        }
+        
         // disable sync so frames show immediately
         g_object_set(videosink, "sync", FALSE, nullptr);
+    } else {
+        // Verify the videosink is still valid
+        if (!GST_IS_ELEMENT(videosink)) {
+            qWarning() << "[VideoReceiver] createPipeline: existing videosink is invalid, creating new one";
+            videosink = nullptr;
+            // Recursively call to create a new sink
+            createPipeline(uri);
+            return;
+        }
     }
 
     // Create the playbin pipeline
@@ -916,9 +987,12 @@ void VideoReceiver::createPipeline(const QString& uri) {
                  nullptr);
 
     // If we already have a saved window handle, apply it to the videosink overlay.
-    if (savedWindowId != 0) {
+    if (savedWindowId != 0 && GST_IS_VIDEO_OVERLAY(videosink)) {
         gst_video_overlay_set_window_handle(GST_VIDEO_OVERLAY(videosink),
                                             (guintptr)savedWindowId);
+        qDebug() << "[VideoReceiver] createPipeline: applied window handle to videosink";
+    } else if (savedWindowId != 0) {
+        qDebug() << "[VideoReceiver] createPipeline: videosink does not support video overlay, cannot set window handle";
     }
 
     // Attach a bus watch

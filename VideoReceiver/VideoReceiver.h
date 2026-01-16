@@ -26,6 +26,7 @@ public:
 signals:
     void cameraStarted();
     void cameraError(const QString &message);
+    void videoCharacteristicsUpdated(const QString &characteristics);
 
 private:
     GstElement *pipeline   = nullptr;

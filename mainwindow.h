@@ -106,6 +106,7 @@ private slots:
     bool validateConfiguration(const QString& cameraType);
     void updateConfigDisplay();
     void onShowConfigToggled(bool enabled);
+    void setVideoCharacteristics(const QString& characteristics);
 
 
 signals:
@@ -208,6 +209,9 @@ private:
     QString configErrors;
     QLabel* configDisplayLabel = nullptr;
     bool showConfigOverlay = false;
+    
+    // Video characteristics from stream analysis
+    QString videoCharacteristics;
 
     // Right panel hover expansion
     QTimer* m_hoverTimer = nullptr;

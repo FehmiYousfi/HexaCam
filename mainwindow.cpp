@@ -421,6 +421,8 @@ QDockWidget[floating="true"] {
             this, &MainWindow::onCameraStarted);
     connect(vr, &VideoReceiver::cameraError,
             this, &MainWindow::onCameraError);
+    connect(vr, &VideoReceiver::videoCharacteristicsUpdated,
+            this, &MainWindow::setVideoCharacteristics);
 
     QTimer *cameraPoll = new QTimer(this);
     connect(cameraPoll, &QTimer::timeout, this, &MainWindow::refreshAllCameraStatus);
@@ -1716,7 +1718,7 @@ void MainWindow::updateConfigDisplay()
 {
     if (!configDisplayLabel) {
         configDisplayLabel = new QLabel(ui->VideoRecorderSection);
-        configDisplayLabel->setGeometry(10, 30, 700, 300);
+        configDisplayLabel->setGeometry(10, 30, 250, 500);
         configDisplayLabel->setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 11px;");
         configDisplayLabel->setWordWrap(true);
         configDisplayLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -1852,6 +1854,11 @@ void MainWindow::updateConfigDisplay()
         if (siyiIP != "N/A" && siyiPort > 0 && siyiPath != "N/A") {
             QString rtspUrl = QString("rtsp://%1:%2%3").arg(siyiIP).arg(siyiPort).arg(siyiPath);
             displayText += rtspUrl;
+            
+            // Check if video is being displayed
+            if (cameraController && cameraController->isRunning() && !videoCharacteristics.isEmpty()) {
+                displayText += "\nStatus: Displayed in Main View";
+            }
         } else {
             displayText += "Invalid SIYI config";
         }
@@ -1864,11 +1871,21 @@ void MainWindow::updateConfigDisplay()
         if (aiCameraIP != "N/A" && aiControlPort > 0 && aiPath != "N/A") {
             QString rtspUrl = QString("rtsp://%1:%2%3").arg(aiCameraIP).arg(aiControlPort).arg(aiPath);
             displayText += rtspUrl;
+            
+            // Check if video is being displayed
+            if (cameraController && cameraController->isRunning() && !videoCharacteristics.isEmpty()) {
+                displayText += "\nStatus: Displayed in Main View";
+            }
         } else {
             displayText += "Invalid AI config";
         }
     } else {
         displayText += "No valid config";
+    }
+    
+    // Add video characteristics if available
+    if (!videoCharacteristics.isEmpty() && cameraController && cameraController->isRunning()) {
+        displayText += QString("\n---\n[Video Stream Analysis]\n%1").arg(videoCharacteristics);
     }
     
     // Show Servo config if present (legacy)
@@ -1991,6 +2008,15 @@ void MainWindow::onShowConfigToggled(bool enabled)
 {
     showConfigOverlay = enabled;
     updateConfigDisplay();
+}
+
+void MainWindow::setVideoCharacteristics(const QString& characteristics)
+{
+    videoCharacteristics = characteristics;
+    // Update display if overlay is visible
+    if (showConfigOverlay) {
+        updateConfigDisplay();
+    }
 }
 
 
@@ -2187,15 +2213,16 @@ void MainWindow::onCameraStarted() {
     vr->setWindowId(videoWidget->winId());
 }
 
-void MainWindow::onCameraError(const QString &msg) {
-    ui->lineEditCameraStatus->setText("Camera Not Working");
+void MainWindow::onCameraError(const QString &message) {
+    ui->lineEditCameraStatus->setText(message);
     ui->lineEditCameraStatus->setStyleSheet(
-        "background-color: #ffcccc; color: darkred;");
-    qDebug() << "GStreamer error:" << msg;
+        "background-color: #ff4444; color: white;");
+    // Clear video characteristics when stream stops
+    videoCharacteristics.clear();
+    if (showConfigOverlay) {
+        updateConfigDisplay();
+    }
 }
-
-
-
 
 #include <QProcess>
 
