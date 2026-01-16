@@ -40,6 +40,7 @@ private:
     std::shared_ptr<SIYI_SDK> sdkPtr;
     std::shared_ptr<bool> sdkLoopFlagPtr;
     std::thread receiveThread;
+    std::shared_ptr<std::atomic<bool>> threadExitedPtr;
 
     mutable std::mutex lifeMutex;
     std::atomic<bool> running{false};

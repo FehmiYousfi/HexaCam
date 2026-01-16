@@ -77,10 +77,14 @@ bool SiyiCameraController::start()
     // Rest of your existing start code...
     sdkLoopFlagPtr = std::make_shared<bool>(true);
     threadExited.store(false);
+    threadExitedPtr = std::make_shared<std::atomic<bool>>(false);
 
     auto capturedSdk = sdkPtr;
     auto capturedFlag = sdkLoopFlagPtr;
-    receiveThread = std::thread([capturedSdk, capturedFlag, this]() {
+    auto capturedThreadExited = threadExitedPtr;
+    // Don't use shared_from_this() here to avoid complications, just use the shared ptrs
+    
+    receiveThread = std::thread([capturedSdk, capturedFlag, capturedThreadExited]() {
         qDebug() << "[SiyiCameraController] receive thread started";
         if (capturedSdk && capturedFlag) {
             try {
@@ -90,7 +94,9 @@ bool SiyiCameraController::start()
             }
         }
         qDebug() << "[SiyiCameraController] receive thread exiting";
-        threadExited.store(true);
+        if (capturedThreadExited) {
+            capturedThreadExited->store(true);
+        }
     });
 
     // initial polite queries with error checking
@@ -130,7 +136,11 @@ void SiyiCameraController::stop()
     while (std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now() - tstart).count() < STOP_WAIT_MS)
     {
-        if (threadExited.load()) {
+        bool exited = threadExited.load();
+        if (threadExitedPtr) {
+            exited = threadExitedPtr->load();
+        }
+        if (exited) {
             if (receiveThread.joinable()) {
                 try {
                     receiveThread.join();
@@ -151,6 +161,7 @@ void SiyiCameraController::stop()
 
     sdkPtr.reset();
     sdkLoopFlagPtr.reset();
+    threadExitedPtr.reset();
     running.store(false);
     qDebug() << "[SiyiCameraController] stop() exit";
 }
@@ -263,7 +274,11 @@ void SiyiCameraController::setRtspUri(const QString &uri)
         while (std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - tstart).count() < STOP_WAIT_MS)
         {
-            if (threadExited.load()) {
+            bool exited = threadExited.load();
+            if (threadExitedPtr) {
+                exited = threadExitedPtr->load();
+            }
+            if (exited) {
                 if (receiveThread.joinable()) {
                     try { receiveThread.join(); } catch(...) {}
                 }
