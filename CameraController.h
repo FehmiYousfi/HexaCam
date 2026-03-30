@@ -1,6 +1,7 @@
 #pragma once
 #include <QString>
 #include <functional>
+#include <tuple>
 
 class CameraController {
 public:
@@ -15,11 +16,23 @@ public:
     virtual bool setGimbalSpeed(int yawSpeed, int pitchSpeed) = 0;
     virtual bool setGimbalPosition(int yawPos, int pitchPos) = 0; // optional absolute
 
+    // absolute angle positioning (degrees) — used by ROI zoom
+    virtual bool setGimbalAngles(float yaw, float pitch) { Q_UNUSED(yaw); Q_UNUSED(pitch); return false; }
+
+    // read current gimbal attitude (yaw, pitch, roll in degrees)
+    virtual std::tuple<float,float,float> getGimbalAttitude() const { return {0.f, 0.f, 0.f}; }
+
+    // whether the controller supports ROI zoom (absolute angles + attitude readback)
+    virtual bool supportsRoiZoom() const { return false; }
+
     // zoom
     virtual bool setAbsoluteZoom(float zoomLevel, int speed = 1) = 0;
 
     // focus / auxiliary actions
     virtual bool requestAutofocus() = 0;
+
+    // center gimbal to default position
+    virtual bool requestGimbalCenter() { return false; }
 
     // video-related (optional, some controllers may change RTSP)
     virtual void setRtspUri(const QString &uri) = 0;

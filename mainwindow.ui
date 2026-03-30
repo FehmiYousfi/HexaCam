@@ -63,10 +63,25 @@
        </widget>
       </item>
       <item>
-       <widget class="QCheckBox" name="showConfigCheckBox">
-        <property name="text">
-         <string>Show Config Info</string>
+       <widget class="QComboBox" name="overlayModeComboBox">
+        <property name="toolTip">
+         <string>Select overlay display mode</string>
         </property>
+        <item>
+         <property name="text">
+          <string>Off</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Stream Config</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>RealTime Stats</string>
+         </property>
+        </item>
        </widget>
       </item>
       <item>
@@ -450,6 +465,33 @@
                <widget class="QLineEdit" name="siyi_lineEditPath">
                 <property name="placeholderText">
                  <string>Camera Path(ex:/main.246)</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="siyi_checkBoxCompressor">
+                <property name="text">
+                 <string>Compressor Mode</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLineEdit" name="siyi_lineEditVideoIP">
+                <property name="placeholderText">
+                 <string>Video IP (RTSP)</string>
+                </property>
+                <property name="visible">
+                 <bool>false</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLineEdit" name="siyi_lineEditControlIP">
+                <property name="placeholderText">
+                 <string>Control IP (SDK)</string>
+                </property>
+                <property name="visible">
+                 <bool>false</bool>
                 </property>
                </widget>
               </item>

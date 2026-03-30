@@ -49,6 +49,7 @@ add_subdirectory(QJoysticks ${CMAKE_BINARY_DIR}/QJoysticks)
 set(PROJECT_SOURCES
     main.cpp
     mainwindow.cpp
+    mainwindow_ui_setup.cpp
     mainwindow.h
     signalhandler.cpp
     signalhandler.h
@@ -69,6 +70,8 @@ qt_add_executable(JoystickIdentifier
     CameraController.h
     SiyiCameraController.h SiyiCameraController.cpp
     ServoCameraController.h ServoCameraController.cpp
+    RoiSelectionOverlay.h RoiSelectionOverlay.cpp
+    RoiZoomCalculator.h RoiZoomCalculator.cpp
     mainwindow.ui.bak
 
 

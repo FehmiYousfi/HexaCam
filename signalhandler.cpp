@@ -13,41 +13,41 @@ int SignalHandler::sigintFd[2];
 #include <algorithm>
 
 void killExistingInstances() {
-    FILE* pipe = popen("ps -aux | grep JoystickIdentifier | grep -v grep", "r");
-    if (!pipe) {
-        perror("popen failed");
-        return;
-    }
+    // Get our own binary name from /proc/self/exe so it works regardless
+    // of what the binary is called.
+    pid_t self = getpid();
+    char exePath[4096] = {};
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len <= 0) return;
+    exePath[len] = '\0';
+
+    std::string fullPath(exePath);
+    std::string binaryName = fullPath.substr(fullPath.rfind('/') + 1);
+
+    std::string cmd = "pgrep -f " + binaryName;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return;
 
     std::vector<pid_t> pids;
-    char buffer[256];
-    
+    char buffer[64];
     while (fgets(buffer, sizeof(buffer), pipe)) {
-        std::string line(buffer);
-        std::istringstream iss(line);
-        std::vector<std::string> tokens;
-        std::string token;
-        
-        while (iss >> token) {
-            tokens.push_back(token);
-        }
-        
-        if (tokens.size() > 1) {
-            try {
-                pid_t pid = static_cast<pid_t>(std::stoi(tokens[1]));
-                pids.push_back(pid);
-            } catch (const std::exception& e) {
-                // Invalid PID format, skip
-            }
-        }
+        try {
+            pid_t pid = static_cast<pid_t>(std::stoi(std::string(buffer)));
+            if (pid != self) pids.push_back(pid);
+        } catch (...) {}
     }
     pclose(pipe);
 
+    // SIGTERM first for graceful shutdown, then SIGKILL stragglers
     for (pid_t pid : pids) {
-        if (kill(pid, SIGKILL) == 0) {
-            printf("Killed process %d\n", pid);
-        } else {
-            perror(("Failed to kill process " + std::to_string(pid)).c_str());
+        kill(pid, SIGTERM);
+    }
+    if (!pids.empty()) {
+        usleep(2000000);
+        for (pid_t pid : pids) {
+            if (kill(pid, 0) == 0) {
+                kill(pid, SIGKILL);
+            }
         }
     }
 }

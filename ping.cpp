@@ -305,19 +305,16 @@ HostConnectivityScore ContinuousPingWatcher::getConnectivityScore(const QString&
 }
 
 void ContinuousPingWatcher::performPingCycle() {
+    QMutexLocker locker(&hostsMutex);
+
     // Queue all pings to be executed in the worker thread
     for (auto it = hosts.begin(); it != hosts.end(); ++it) {
         QString hostName = it.key();
         QString hostAddress = it.value().host;
         int requestId = ++nextRequestId;
         
-        // Update pending request ID
-        {
-            QMutexLocker locker(&hostsMutex);
-            if (hosts.contains(hostName)) {
-                hosts[hostName].pendingRequestId = requestId;
-            }
-        }
+        // Update pending request ID (already under lock)
+        hosts[hostName].pendingRequestId = requestId;
         
         // Queue ping in worker thread
         QMetaObject::invokeMethod(pingWorker, "pingHost", Qt::QueuedConnection,
@@ -325,7 +322,7 @@ void ContinuousPingWatcher::performPingCycle() {
                                   Q_ARG(int, pingTimeout),
                                   Q_ARG(int, requestId));
         
-        qDebug() << "[PING_WATCHER] Queued ping for" << hostName << "with ID" << requestId;
+        LOG_PING_WATCHER() << "Queued ping for" << hostName << "with ID" << requestId;
     }
 }
 
@@ -345,20 +342,22 @@ void ContinuousPingWatcher::onPingResult(int requestId, const QString& host, boo
             // Update connectivity score
             hostInfo.score.updatePing(success, roundTripTime, error);
             
-            // Emit signals
-            emit hostStatusChanged(hostInfo.name, success, roundTripTime);
-            
+            // Only emit status change when it actually changed
             if (statusChanged) {
                 qDebug() << "[PING_WATCHER]" << hostInfo.name << "camera status:" 
                          << (success ? "REACHABLE" : "UNREACHABLE") << "RTT:" << roundTripTime << "ms";
+                emit hostStatusChanged(hostInfo.name, success, roundTripTime);
                 emit hostError(hostInfo.name, success ? "" : "Host unreachable");
             }
             
             emit connectivityScoreUpdated(hostInfo.name, hostInfo.score);
             
-            qDebug() << "[PING_WATCHER] Ping result for" << hostInfo.name << ":" 
-                     << (success ? "SUCCESS" : "FAILED") << "ID:" << requestId
-                     << "Score:" << hostInfo.score.overallScore;
+            // Only log failures to reduce noise
+            if (!success) {
+                qDebug() << "[PING_WATCHER] Ping FAILED for" << hostInfo.name
+                         << "ID:" << requestId
+                         << "Score:" << hostInfo.score.overallScore;
+            }
             break;
         }
     }
