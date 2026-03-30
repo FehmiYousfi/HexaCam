@@ -47,32 +47,37 @@
 #include <QMetaObject>
 #include "SiyiCameraController.h"
 #include "ServoCameraController.h"
-
-
+#include <QPainter>
+#include <QPixmap>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QVideoWidget>
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QSlider>
+#include <QStyle>
 //#include "servo_client.hpp"
 
-//static const char *CONTROL_IP = "10.14.11.3";
 static const int CONTROL_PORT = 37260;
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
       ui(new Ui::MainWindow),
       keepRunning(true),
-      //sdk(nullptr),
       currentZoom(1.0f)
-
 {
     ui->setupUi(this);
+
 #ifdef _DEBUG
     QPushButton *dbg = new QPushButton("DBG: pan+50", this);
     dbg->setToolTip("Sends a single setGimbalSpeed(50,0) to see if gimbal moves");
     dbg->setFixedSize(110,24);
-    dbg->move(10, 10); // move somewhere unobtrusive
+    dbg->move(10, 10);
     connect(dbg, &QPushButton::clicked, this, [this]() {
         if (cameraController && cameraController->isRunning()) {
             qDebug() << "[DBG] sending single gimbal speed 50,0";
             cameraController->setGimbalSpeed(50,0);
-            QTimer::singleShot(300, this, [this]() { // stop after 300 ms
+            QTimer::singleShot(300, this, [this]() {
                 if (cameraController) cameraController->setGimbalSpeed(0,0);
             });
         } else {
@@ -81,519 +86,44 @@ MainWindow::MainWindow(QWidget *parent)
     });
 #endif
 
+    // ── UI Setup (implemented in mainwindow_ui_setup.cpp) ──
     qApp->installEventFilter(this);
-
     ui->toggleButton->setFocusPolicy(Qt::NoFocus);
-
-    // allow children to get focus again
     this->setFocusPolicy(Qt::StrongFocus);
-    // and ensure our central widget can accept focus too
     ui->centralwidget->setFocusPolicy(Qt::StrongFocus);
 
-    // ui->lineEditIP  ->setFocusPolicy(Qt::StrongFocus);
-    // ui->lineEditPort->setFocusPolicy(Qt::StrongFocus);
-    // ui->lineEditPath->setFocusPolicy(Qt::StrongFocus);
+    setupStyles();
+    setupLayout();
+    setupConnections();
 
-    // Ensure cameraTypeStack starts on chooser page:
-    if (ui->cameraTypeStack) {
-        ui->cameraTypeStack->setCurrentIndex(0); // chooser page
-
-        // Connect chooser buttons
-        connect(ui->btnSelectSiyi, &QPushButton::clicked, this, &MainWindow::onSelectSiyiClicked);
-        connect(ui->btnSelectServo, &QPushButton::clicked, this, &MainWindow::onSelectServoClicked);
-        connect(ui->btnSelectAi, &QPushButton::clicked, this, &MainWindow::onSelectAiClicked);
-
-        // Connect back buttons (both pages call same back slot)
-        connect(ui->btnSiyiBack, &QPushButton::clicked, this, &MainWindow::onCameraChooseBack);
-        connect(ui->btnServoBack, &QPushButton::clicked, this, &MainWindow::onCameraChooseBack);
-        connect(ui->btnAiBack, &QPushButton::clicked, this, &MainWindow::onCameraChooseBack);
-
-        if (ui->btnSiyiSave)
-            connect(ui->btnSiyiSave, &QPushButton::clicked, this, &MainWindow::saveConfig);
-        if (ui->btnServoSave)
-            connect(ui->btnServoSave, &QPushButton::clicked, this, &MainWindow::saveConfig);
-        if (ui->btnAiSave)
-            connect(ui->btnAiSave, &QPushButton::clicked, this, &MainWindow::saveConfig);
-
-        if (ui->btnSiyiDefault)
-            connect(ui->btnSiyiDefault, &QPushButton::clicked, this, &MainWindow::onSiyiDefaultClicked);
-        if (ui->btnServoDefault)
-            connect(ui->btnServoDefault, &QPushButton::clicked, this, &MainWindow::onServoDefaultClicked);
-        if (ui->btnAiDefault)
-            connect(ui->btnAiDefault, &QPushButton::clicked, this, &MainWindow::onAiDefaultClicked);
-    }
-
-    // Connect config display checkbox
-    if (ui->showConfigCheckBox) {
-        connect(ui->showConfigCheckBox, &QCheckBox::toggled, this, &MainWindow::onShowConfigToggled);
-    }
-
-    // Connect video source dropdown
-    if (ui->videoSourceComboBox) {
-        connect(ui->videoSourceComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-            // Skip during initialization to prevent race condition
-            if (isInitializing) {
-                LOG_VIDEO_SOURCE() << "Dropdown changed during initialization - skipping to prevent race condition";
-                return;
-            }
-            
-            QString selectedSource = ui->videoSourceComboBox->currentText();
-            LOG_VIDEO_SOURCE() << "Dropdown changed - index:" << index << "source:" << selectedSource;
-            
-            // Update videoSource in JSON config directly
-            LOG_VIDEO_SOURCE() << "Updating videoSource in config...";
-            updateVideoSourceInConfig();
-            
-            // Apply the new configuration with proper shutdown/restart sequence
-            LOG_VIDEO_SOURCE() << "Applying new video source with proper shutdown/restart...";
-            applyConfig();
-            LOG_VIDEO_SOURCE() << "Video source workflow completed";
-        });
-    }
-
-    // Ensure port fields only accept numbers
-    auto setPortValidator = [this](QLineEdit* le){
-        if (!le) return;
-        le->setValidator(new QIntValidator(1, 65535, this));
-    };
-
-    // SIYI ports
-    setPortValidator(ui->siyi_lineEditPort);
-
-    // Servo ports
-    setPortValidator(ui->servo_lineEditPort);
-    setPortValidator(ui->servo_lineEditServoPort);
-
-    // When the user opens the Camera Configuration tab, populate fields
-    connect(ui->tabWidget, &QTabWidget::currentChanged, this, [this](int index){
-        // find tab index for Camera Configuration. If you know it's 2, check equality.
-        // Here we simply check if the currently visible widget is the camera config page
-        QWidget* current = ui->tabWidget->widget(index);
-        if (current == ui->tabWidget /* replace with actual page widget pointer if present */) {
-            populateConfigFields();
-        } else {
-            // Alternatively, call populateConfigFields when the user clicks the Camera Configuration button
-        }
-    });
-
-
-
-    // Load configuration at startup to set dropdown correctly
-    qDebug() << "[VIDEO_SOURCE] Startup: Loading configuration to initialize video source dropdown";
+    // Load configuration at startup (before video widget so dropdown is correct)
     isInitializing = true;
     populateConfigFields();
     isInitializing = false;
 
+    setupVideoWidget();
+    setupRecordingOverlay();
+    setupConfigOverlayLabel();
 
-    QStatusBar* statusBarr = new QStatusBar();
-    statusBarr->setStyleSheet("background-color: #2d2d44; color: #aaaaaa;");
-    setStatusBar(statusBarr);
-
-    /////////////////////////////////////////////////////
-    /// \brief setWindowTitle
-    /// Main styling
-    setWindowTitle("Hexa5Camera");
-    // if you have an application icon
-    setWindowIcon(QIcon(":/hexa5.png"));
-
-
-    QFont f = font();
-    f.setPointSize(10);
-    setFont(f);
-
-    // Add some internal margins around your main layout
-    // ui->centralwidget->layout()->setContentsMargins(8,8,8,8);
-    // ui->centralwidget->layout()->setSpacing(6);
-
-    ui->VideoRecorderSection->setFlat(true);
-
-
-    /////////////////////////////////////////////////////
-
-    /////////////////////////////////////////////////////
-    /// controlsContainer Creation
-
-    // 1) Create a horizontal layout to replace the absolute geometry
-    auto *hl = new QHBoxLayout(ui->centralwidget);
-    hl->setContentsMargins(0,0,0,0);
-    hl->setSpacing(0);
-    hl->addWidget(ui->VideoRecorderSection, 1);
-    hl->addWidget(ui->toggleButton,         0);
-    hl->addWidget(ui->controlsContainer,    0);
-
-    // 2) completely kill any padding inside controlsContainer itself
-    if (auto *inner = qobject_cast<QBoxLayout*>(ui->controlsContainer->layout())) {
-        inner->setContentsMargins(0,0,0,0);
-        inner->setSpacing(0);
-    }
-
-    // 3) make the container truly Fixed‐width so 0px is honored
-    ui->controlsContainer->setSizePolicy(
-        QSizePolicy::Fixed,
-        ui->controlsContainer->sizePolicy().verticalPolicy()
-        );
-    ui->controlsContainer->setMinimumWidth(0);
-    ui->controlsContainer->setMaximumWidth(0);
-    ui->controlsContainer->hide();  // start fully hidden
-
-    // 4) measure its “full” width
-    int fullW = ui->controlsContainer->sizeHint().width();
-    if (fullW < 10) fullW = 320; // fallback
-
-    // 5) build a single animation on its maximumWidth
-    m_panelAnimation = new QPropertyAnimation(ui->controlsContainer, "maximumWidth", this);
-    m_panelAnimation->setDuration(250);
-    m_panelAnimation->setStartValue(0);
-    m_panelAnimation->setEndValue(fullW);
-
-    // 6) wire up hover expansion instead of toggle button
-    m_hoverTimer = new QTimer(this);
-    m_hoverTimer->setSingleShot(true);
-    m_hoverTimer->setInterval(300); // 300ms delay before expanding
-    
-    // Install event filter on the main window to detect mouse near right edge
-    this->installEventFilter(this);
-    this->setMouseTracking(true);
-    
-    connect(ui->toggleButton, &QToolButton::clicked, this, [this]() {
-        // Fallback button click - toggle panel manually
-        if (m_panelExpanded) {
-            m_panelAnimation->setDirection(QPropertyAnimation::Backward);
-            m_panelAnimation->start();
-        } else {
-            ui->controlsContainer->show();
-            m_panelAnimation->setDirection(QPropertyAnimation::Forward);
-            m_panelAnimation->start();
-            m_panelExpanded = true;
-        }
-    });
-    connect(m_panelAnimation, &QPropertyAnimation::finished, this, [this]() {
-        auto *ctr  = ui->controlsContainer;
-        auto *lay   = ui->centralwidget->layout();
-
-        if (m_panelAnimation->direction() == QAbstractAnimation::Backward) {
-            // fully collapse
-            ctr->hide();
-            m_panelExpanded = false;
-        }
-
-        // Force the parent layout to re‐do its math
-        if (lay) {
-            lay->invalidate();
-            lay->activate();
-        }
-        ui->centralwidget->updateGeometry();
-    });
-
-
-
-
-    ////////////////////////////////////////////////////
-
-    ////////////////////////////////////////////////////
-    /// Style
-    ui->tabWidget->setStyleSheet(R"(
-  /* overall pane */
-  QTabWidget::pane {
-    border: 1px solid #4A4A4A;
-    background: #2B2B2B;
-    top: -1px;              /* overlap tabs’ bottom border */
-  }
-  /* the tabs */
-  QTabBar::tab {
-    background: #3C3F41;
-    color: #A9B7C6;
-    padding: 6px 12px;
-    margin-right: 2px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    min-width: 80px;
-  }
-  QTabBar::tab:selected {
-    background: #4E5254;
-    color: #FFF;
-  }
-  QTabBar::tab:hover {
-    background: #505354;
-  }
-  /* remove focus outline */
-  QTabBar::tab:focus { outline: none; }
-)");
-
-
-    qApp->setStyleSheet(R"(
-  QPushButton {
-    background: #3C3F41;
-    border: 1px solid #5A5A5A;
-    padding: 6px 12px;
-    color: #DDD;
-    border-radius: 3px;
-  }
-  QPushButton:hover {
-    background: #505354;
-  }
-  QPushButton:pressed {
-    background: #2A2D2F;
-  }
-)");
-
-    qApp->setStyleSheet(R"(
-QDockWidget {
-  background: #2b2b2b;
-  titlebar-close-icon: none;  /* just in case */
-}
-
-/* style its title bar */
-QDockWidget::title {
-  text-align: left;
-  padding: 4px 8px;
-  background: qlineargradient(
-      x1:0, y1:0, x2:0, y2:1,
-      stop:0 #393939, stop:1 #2b2b2b
-  );
-  color: #ffffff;
-  font-weight: bold;
-  border-bottom: 1px solid #444444;
-}
-
-/* when floating, give it a thin border */
-QDockWidget[floating="true"] {
-  border: 1px solid #555555;
-}
-
-)");
-
-
-
-    // Joystick button: switch mode *and* select tab 0
-    connect(ui->switchtojoystick, &QPushButton::clicked, this, [this]() {
-        onSwitchToJoystick();                // existing logic to flip into JOYSTICK mode
-        ui->tabWidget->setCurrentIndex(0);   // show the “Joystick” tab
-    });
-
-    // Keyboard button: switch mode *and* select tab 1
-    connect(ui->switchtokeyboard, &QPushButton::clicked, this, [this]() {
-        onSwitchToKeyboard();                // existing logic to flip into KEYBOARD mode
-        ui->tabWidget->setCurrentIndex(1);   // show the “Keyboard” tab
-    });
-
-    // Camera-Config button: flip into CONFIG mode *and* select tab 2
-    connect(ui->pushButtonConfiguration, &QPushButton::clicked, this, [this]() {
-        onSwitchToConfiguration();
-        ui->tabWidget->setCurrentIndex(2);   // show the “Camera Configuration” tab
-    });
-
-
-
-    //QApplication::instance()->installEventFilter(this);
-    connect(QJoysticks::getInstance(),
-            &QJoysticks::axisChanged,
-            this,
-            &MainWindow::onJoystickAxisChanged);
-    videoWidget = new VideoRecorderWidget(this);
-    //videoWidget->installEventFilter(this);
-    videoWidget->setFocusPolicy(Qt::NoFocus);
-    videoWidget->getReceiver()->setWindowId(videoWidget->winId());
-    QVBoxLayout *videoLayout = new QVBoxLayout();
-    videoLayout->setContentsMargins(0, 0, 0, 0);
-    videoLayout->addWidget(videoWidget);
-    if (ui->VideoRecorderSection) {
-        ui->VideoRecorderSection->setLayout(videoLayout);
-    } else {
-        #ifdef _DEBUG
-        qDebug() << "VideoRecorderWidget not found in the Video Recorder section!";
-        #endif
-    }
-
-    rtspUri = videoWidget->getReceiver()->getRtspUriFromConfig();
-    qDebug() << "[VideoReceiver] opening RTSP URI:" << rtspUri;
-
-
-    // 1) give an initial “checking” state
-    ui->lineEditCameraStatus->setText("Checking…");
-    ui->lineEditCameraStatus->setStyleSheet(
-        "background-color: lightgray; color: black;");
-
-    // 2) get the receiver and connect
-    auto *vr = videoWidget->getReceiver();
-    vr->setWindowId(videoWidget->winId());
-    connect(vr, &VideoReceiver::cameraStarted,
-            this, &MainWindow::onCameraStarted);
-    connect(vr, &VideoReceiver::cameraError,
-            this, &MainWindow::onCameraError);
-    connect(vr, &VideoReceiver::videoCharacteristicsUpdated,
-            this, &MainWindow::setVideoCharacteristics);
-
-    QTimer *cameraPoll = new QTimer(this);
-    connect(cameraPoll, &QTimer::timeout, this, &MainWindow::refreshAllCameraStatus);
-    cameraPoll->start(5000);
-
-    refreshAllCameraStatus(); // Monitor all cameras instead of just one
-
-    // Connect the Rescan button and joystick signals.
-    connect(ui->Rescan, &QPushButton::clicked, this, &MainWindow::updateDeviceList);
-    connect(QJoysticks::getInstance(), &QJoysticks::countChanged,
-            this, &MainWindow::updateDeviceList);
-    connect(QJoysticks::getInstance(), &QJoysticks::buttonChanged,
-            this, &MainWindow::updateButtonState);
-    connect(ui->listWidget, &QListWidget::itemClicked,
-            this, &MainWindow::onJoystickItemClicked);
-
-    // Mode switch buttons.
-    connect(ui->switchtokeyboard, &QPushButton::clicked, this, &MainWindow::onSwitchToKeyboard);
-    connect(ui->switchtojoystick, &QPushButton::clicked, this, &MainWindow::onSwitchToJoystick);
-    connect(ui->pushButtonConfiguration, &QPushButton::clicked, this, &MainWindow::onSwitchToConfiguration);
-
-    // in MainWindow::MainWindow(...)
-    connect(ui->toolButtonUp,    &QToolButton::clicked, this, &MainWindow::onFullUp);
-    connect(ui->toolButtonDown,  &QToolButton::clicked, this, &MainWindow::onFullDown);
-    connect(ui->toolButtonLeft,  &QToolButton::clicked, this, &MainWindow::onFullLeft);
-    connect(ui->toolButtonRight, &QToolButton::clicked, this, &MainWindow::onFullRight);
-    connect(ui->toolButtonStop, &QToolButton::clicked, this, &MainWindow::onStop);
-
-    // and your zoom buttons:
-    connect(ui->toolButtonZoomPlus,  &QToolButton::clicked, this, &MainWindow::onZoomMaxIn);
-    connect(ui->toolButtonZoomMinus, &QToolButton::clicked, this, &MainWindow::onZoomMaxOut);
-
-
-    // connect(ui->pushButtonSaveConfig, &QPushButton::clicked, this, &MainWindow::saveConfig);
-    // connect(ui->DefaultConfig, &QPushButton::clicked, this, &MainWindow::saveDefaultConfig);
-
-    // Set focus policy so that key events arrive at the main window.
+    // ── Runtime initialization ──
     setFocusPolicy(Qt::StrongFocus);
     setFocus();
 
-    qApp->installEventFilter(this);
-
-
     updateDeviceList();
     statusBar()->showMessage("Ready");
-    #ifdef _DEBUG
-    qDebug() << "Detected Joysticks:" << QJoysticks::getInstance()->deviceNames();
-    #endif
-    for (int i = 0; i < QJoysticks::getInstance()->count(); i++) {
-        #ifdef _DEBUG
-        qDebug() << "Joystick" << i << "axis count:"
-                 << QJoysticks::getInstance()->getNumAxes(i);
-        #endif
-    }
 
+    // Joystick axis polling timer
     QTimer *pollTimer = new QTimer(this);
     connect(pollTimer, &QTimer::timeout, this, &MainWindow::pollAxisValues);
     pollTimer->start(50);
 
-    // Set up a timer to send gimbal commands every 100ms.
+    // Gimbal command timer
     commandTimer = new QTimer(this);
     connect(commandTimer, &QTimer::timeout, this, &MainWindow::sendGimbalCommands);
-    //commandTimer->setInterval(50);
     commandTimer->start(50);
-    qDebug() << "[MainWindow] gimbalTimer started (50ms)";
 
-
-    // // Create the SIYI SDK instance.
-
-    // std::string ip = "10.14.11.3";
-    // int port = 37260;
-    // sdk = new SIYI_SDK(ip.c_str(), 37260);
-    // if (sdk->request_firmware_version()) {
-    //     qDebug() << "Requested firmware version. Waiting for response...";
-    //     std::this_thread::sleep_for(std::chrono::seconds(2));
-    //     auto [code_version, gimbal_version, zoom_version] = sdk->get_firmware_version();
-    //     qDebug() << "Code Board: " << code_version.c_str()
-    //              << "  Gimbal: " << gimbal_version.c_str()
-    //              << "  Zoom: " << zoom_version.c_str();
-    // } else {
-    //     qDebug() << "Failed to request firmware version.";
-    // }
-    // if (sdk->request_gimbal_center()){
-    //     qDebug() << "Requested gimbal center . Waiting for response...";
-    // }
-    // if(sdk->request_autofocus()){
-    //     qDebug() << "Requested autofocus. Waiting for response...";
-    // }
-
-    // receiveThread = std::thread([this]() {
-    //     bool keepRunningLocal = keepRunning.load();
-    //     sdk->receive_message_loop(keepRunningLocal);
-    // });
-    // #ifdef _DEBUG
-    // qDebug() << "Camera control initialized";
-    // #endif
-
+    // Deferred camera controller initialization
     QTimer::singleShot(100, this, &MainWindow::initializeCameraController);
-    createCameraControllerFromConfig();
-
-
-    //Recording Video Section
-    useLocalCamera = true;
-    // Recording overlay + timer
-    recordOverlay = new QLabel(videoWidget);
-    recordOverlay->setStyleSheet(R"(
-  background-color: rgba(0,0,0,128);
-  color: red;
-  font: bold 16px;
-)");
-    recordOverlay->setAlignment(Qt::AlignCenter);
-    recordOverlay->setFixedHeight(30);
-    recordOverlay->setFixedWidth(videoWidget->width());
-    recordOverlay->move(0,0);
-    recordOverlay->hide();
-    recordOverlay->raise();
-
-    // Create the timer for updating the overlay clock
-    recordUiTimer = new QTimer(this);
-    recordUiTimer->setInterval(500);
-    connect(recordUiTimer, &QTimer::timeout,
-            this,         &MainWindow::updateRecordTime);
-
-    // Button hookup
-    // connect(ui->RecordButton, &QPushButton::clicked,
-    //         this,            &MainWindow::on_RecordButton_clicked);
-    recordState = RecordState::Idle;
-    ui->RecordButton->setText("Start Recording");
-
-    //Screenshot
-    connect(ui->ScreenshotButton, &QPushButton::clicked,
-            this,               &MainWindow::on_ScreenshotButton_clicked);
-
-
-    // e.g. read it from your camera‐config QLineEdits, or just hard‑code
-    QString servoIp   = loadServoIp();
-    int     servoPort = loadServoPort();
-
-    // // 1) instantiate
-    // _servo = std::make_unique<ServoControl::ServoClient>(
-    //     servoIp.toStdString(),
-    //     servoPort,
-    //     /*timeout_ms=*/ 2000
-    //     );
-
-    // // 2) try to connect
-    // if (!_servo->connect()) {
-    //     statusBar()->showMessage(
-    //         QString("Servo connect failed: %1")
-    //             .arg(QString::fromStdString(_servo->getLastError())),
-    //         5000
-    //         );
-    // } else {
-    //     statusBar()->showMessage("Servo connected", 2000);
-    // }
-
-    // // 1) take ownership of your existing client and make a worker
-    // auto client = std::move(_servo);
-    // auto* thread = new QThread(this);
-    // auto* worker = new ServoWorker(std::move(client));
-    // worker->moveToThread(thread);
-    // connect(thread, &QThread::finished, worker, &QObject::deleteLater);
-    // thread->start();
-
-    // // 2) expose a signal so we can tell the worker "new position!"
-    // connect(this, &MainWindow::servoPositionChanged,
-    //         worker, &ServoWorker::setPosition,
-    //         Qt::QueuedConnection);
-
-    // // 3) initialize value (if you like)
-    // emit servoPositionChanged(_servoPosition);
 }
 
 
@@ -637,14 +167,19 @@ void MainWindow::updateDeviceList() {
     } else {
         for (int i = 0; i < names.size(); ++i) {
             int axisCount = QJoysticks::getInstance()->getNumAxes(i);
-            QListWidgetItem *item = new QListWidgetItem(names[i]);
+            QString label = QString("%1 (%2 axes)").arg(names[i]).arg(axisCount);
+            QListWidgetItem *item = new QListWidgetItem(label);
             item->setData(Qt::UserRole, i);
+            item->setForeground(Qt::white);
             if (axisCount == 3) {
-                item->setBackground(Qt::green);
+                item->setBackground(QColor(46, 125, 50));   // soft green
                 item->setFlags(item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+                item->setToolTip("Compatible — click to select");
             } else {
-                item->setBackground(Qt::red);
-                item->setFlags(item->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+                item->setBackground(QColor(183, 28, 28));   // soft red
+                item->setFlags(item->flags() | Qt::ItemIsEnabled);
+                item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+                item->setToolTip("Incompatible — requires 3 axes");
             }
             ui->listWidget->addItem(item);
             qDebug() << "Joystick" << i << "axis count:" << axisCount << "name:" << names[i];
@@ -680,12 +215,40 @@ void MainWindow::updateAxisValues(int js, int axis, qreal value) {
         else if (axis == 1)
             ui->progressBar_2->setValue(percent);
     } else if (axis == 2) {
-        int steps = static_cast<int>((currentZoom - MIN_ZOOM)/ZOOM_STEP_CONSTANT + 0.5f);
-        int maxSteps = static_cast<int>((MAX_ZOOM - MIN_ZOOM)/ZOOM_STEP_CONSTANT + 0.5f);
-        ui->progressBar_3->setRange(0, maxSteps);
+        // Incremental zoom: center = hold, forward = zoom in, backward = zoom out
+        // Zoom level persists when axis returns to center.
+        constexpr int    ZOOM_STEPS   = 5;
+        constexpr qreal  DEAD_ZONE    = 0.25;   // ignore small axis drift
+        constexpr qint64 REPEAT_MS    = 400;     // ms between repeated steps when held
+
+        if (qAbs(value) > DEAD_ZONE) {
+            // Determine direction: positive = zoom in, negative = zoom out
+            int direction = (value > 0) ? 1 : -1;
+
+            // Only step if enough time has passed (repeat rate limiter)
+            if (!zoomRepeatTimer.isValid() || zoomRepeatTimer.elapsed() >= REPEAT_MS) {
+                int newLevel = qBound(0, lastZoomLevel + direction, ZOOM_STEPS);
+                if (newLevel != lastZoomLevel) {
+                    lastZoomLevel = newLevel;
+                    float newZoom = MIN_ZOOM + lastZoomLevel * ZOOM_STEP_CONSTANT;
+                    newZoom = qBound(MIN_ZOOM, newZoom, MAX_ZOOM);
+
+                    currentZoom = newZoom;
+                    if (cameraController) cameraController->setAbsoluteZoom(currentZoom, 1);
+                    qDebug() << "[JS] Zoom level=" << lastZoomLevel << " zoom=" << newZoom;
+                }
+                zoomRepeatTimer.restart();
+            }
+        } else {
+            // Axis in dead zone — stop repeat timer so next push steps immediately
+            zoomRepeatTimer.invalidate();
+        }
+
+        // Update UI slider to reflect current level
+        ui->progressBar_3->setRange(0, ZOOM_STEPS);
         ui->progressBar_3->setTextVisible(true);
         ui->progressBar_3->setFormat("%v");
-        ui->progressBar_3->setValue(steps);
+        ui->progressBar_3->setValue(lastZoomLevel);
     } else {
         qDebug() << "Unknown axis index:" << axis;
     }
@@ -709,6 +272,13 @@ void MainWindow::updateButtonState(int js, int button, bool pressed) {
 
 void MainWindow::onJoystickAxisChanged(int dev, int axis, qreal value)
 {
+    // Debug: log ALL axis events before filtering
+    if (axis >= 2) {
+        qDebug() << "[JS-DEBUG] dev=" << dev << " axis=" << axis << " value=" << value
+                 << " inputMode=" << static_cast<int>(inputMode)
+                 << " cameraJoystickIndex=" << cameraJoystickIndex;
+    }
+
     // Only when in joystick‐mode and on the selected device
     if (inputMode != InputMode::Joystick || dev != cameraJoystickIndex)
         return;
@@ -736,49 +306,9 @@ void MainWindow::onJoystickAxisChanged(int dev, int axis, qreal value)
         QMutexLocker locker(&commandMutex);
         currentPitchSpeed = pitch;
     }
-    // else if (axis == 2) {
-    //     // Third axis → zoom
-    //     float target = currentZoom + curved * ZOOM_SPEED;
-    //     // Clamp to your min/max
-    //     float clamped = qBound(MIN_ZOOM, target, MAX_ZOOM);
-    //     if (!qFuzzyCompare(clamped, currentZoom)) {
-    //         currentZoom = clamped;
-    //         sdk->set_absolute_zoom(currentZoom, 1);
-    //         sdk->request_autofocus();
-    //     }
-    //     return;   // don’t also send a gimbal‐move
-    // }
     else if (axis == 2) {
-        // 1) ignore all “pull back” (negative) values so center=0
-        qreal v = qMax<qreal>(value, 0.0);
-
-        // 2) choose how many steps you want: e.g. 7 steps → levels 0..7
-        constexpr int ZOOM_STEPS = 5;
-        //int ZOOM_STEPS = int((MAX_ZOOM - MIN_ZOOM) / ZOOM_STEP_CONSTANT + 0.5f);
-        // 3) map [0..1] → [0..ZOOM_STEPS], rounding to nearest integer
-        int level = int(v * ZOOM_STEPS + 0.5);
-        level = qBound(0, level, ZOOM_STEPS);
-
-        // 4) only change zoom when we actually cross into a new step
-        if (level != lastZoomLevel) {
-            // compute the actual zoom value for this step
-            float newZoom = MIN_ZOOM + level * ZOOM_STEP_CONSTANT;
-            newZoom = qBound(MIN_ZOOM, newZoom, MAX_ZOOM);
-
-            currentZoom = newZoom;
-            //sdk->set_absolute_zoom(currentZoom, 1);
-            if (cameraController) cameraController->setAbsoluteZoom(currentZoom, 1);
-            //sdk->request_autofocus();
-
-            lastZoomLevel = level;
-        }
-
-        // update your little UI slider (if you like):
-        ui->progressBar_3->setRange(0, ZOOM_STEPS);
-        ui->progressBar_3->setFormat("%v");
-        ui->progressBar_3->setValue(level);
-
-        return;   // don't send any yaw/pitch
+        // Zoom is handled in updateAxisValues — skip here
+        return;
     }
 
     else {
@@ -962,7 +492,7 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
             QMutexLocker locker(&commandMutex);
             currentZoom = std::min(MAX_ZOOM, currentZoom + ZOOM_SPEED);
             if(ui->toolButtonZoomPlus) ui->toolButtonZoomPlus->setStyleSheet("background-color: green;");
-            cameraController->setAbsoluteZoom(currentZoom, 1);
+            if (cameraController) cameraController->setAbsoluteZoom(currentZoom, 1);
         }
             break;
         case Qt::Key_Minus:
@@ -971,7 +501,7 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
             QMutexLocker locker(&commandMutex);
             currentZoom = std::max(MIN_ZOOM, currentZoom - ZOOM_SPEED);
             if(ui->toolButtonZoomMinus) ui->toolButtonZoomMinus->setStyleSheet("background-color: green;");
-            cameraController->setAbsoluteZoom(currentZoom, 1);
+            if (cameraController) cameraController->setAbsoluteZoom(currentZoom, 1);
         }
             break;
         default:
@@ -1033,7 +563,6 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event) {
                 qDebug() << "[keyReleaseEvent] immediate stop setGimbalSpeed returned:" << (ok ? "OK" : "FAIL");
             }
         }
-            currentYawSpeed = 0;
             ui->toolButtonLeft->setStyleSheet("");
             ui->toolButtonRight->setStyleSheet("");
             break;
@@ -1280,7 +809,15 @@ void MainWindow::populateConfigFields()
     // Load SIYI config if present
     if (obj.contains("siyiConfig")) {
         QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
-        if (ui->siyi_lineEditIP) ui->siyi_lineEditIP->setText(siyiConfig.value("ip").toString(ipDefault));
+        bool compressorMode = siyiConfig.value("compressorMode").toBool(false);
+        if (ui->siyi_checkBoxCompressor) ui->siyi_checkBoxCompressor->setChecked(compressorMode);
+        if (compressorMode) {
+            if (ui->siyi_lineEditVideoIP) ui->siyi_lineEditVideoIP->setText(siyiConfig.value("videoIP").toString(""));
+            if (ui->siyi_lineEditControlIP) ui->siyi_lineEditControlIP->setText(siyiConfig.value("controlIP").toString(""));
+            if (ui->siyi_lineEditIP) ui->siyi_lineEditIP->setText(ipDefault);
+        } else {
+            if (ui->siyi_lineEditIP) ui->siyi_lineEditIP->setText(siyiConfig.value("ip").toString(ipDefault));
+        }
         if (ui->siyi_lineEditPort) ui->siyi_lineEditPort->setText(QString::number(siyiConfig.value("port").toInt(portDefault)));
         if (ui->siyi_lineEditPath) ui->siyi_lineEditPath->setText(siyiConfig.value("path").toString(pathDefault));
     }
@@ -1396,6 +933,9 @@ void MainWindow::saveConfigWithoutApply() {
     QString siyiIP = ui->siyi_lineEditIP ? ui->siyi_lineEditIP->text().trimmed() : "";
     int siyiPort = ui->siyi_lineEditPort ? ui->siyi_lineEditPort->text().toInt() : 0;
     QString siyiPath = ui->siyi_lineEditPath ? ui->siyi_lineEditPath->text().trimmed() : "";
+    bool siyiCompressor = ui->siyi_checkBoxCompressor ? ui->siyi_checkBoxCompressor->isChecked() : false;
+    QString siyiVideoIP = ui->siyi_lineEditVideoIP ? ui->siyi_lineEditVideoIP->text().trimmed() : "";
+    QString siyiControlIP = ui->siyi_lineEditControlIP ? ui->siyi_lineEditControlIP->text().trimmed() : "";
     
     QString aiCameraIP = ui->ai_lineEditCameraIP ? ui->ai_lineEditCameraIP->text().trimmed() : "";
     int aiControlPort = ui->ai_lineEditControlPort ? ui->ai_lineEditControlPort->text().toInt() : 0;
@@ -1413,11 +953,16 @@ void MainWindow::saveConfigWithoutApply() {
     qDebug() << "[VIDEO_SOURCE] Selected video source for saving:" << videoSource << "(index:" << (ui->videoSourceComboBox ? ui->videoSourceComboBox->currentIndex() : -1) << ")";
     
     // Validate configurations
-    bool siyiValid = !siyiIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    bool siyiValid = false;
+    if (siyiCompressor) {
+        siyiValid = !siyiVideoIP.isEmpty() && !siyiControlIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    } else {
+        siyiValid = !siyiIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    }
     bool aiValid = !aiCameraIP.isEmpty() && aiControlPort > 0 && !aiPath.isEmpty();
     bool servoValid = !servoIP.isEmpty() && servoPort > 0;
     
-    qDebug() << "[VIDEO_SOURCE] Config validation - SIYI:" << siyiValid << "AI:" << aiValid << "Servo:" << servoValid;
+    qDebug() << "[VIDEO_SOURCE] Config validation - SIYI:" << siyiValid << "AI:" << aiValid << "Servo:" << servoValid << "Compressor:" << siyiCompressor;
     
     // At least one configuration must be valid
     if (!siyiValid && !aiValid) {
@@ -1432,11 +977,17 @@ void MainWindow::saveConfigWithoutApply() {
     // Add SIYI config if valid
     if (siyiValid) {
         QJsonObject siyiConfig;
-        siyiConfig["ip"] = siyiIP;
         siyiConfig["port"] = siyiPort;
         siyiConfig["path"] = siyiPath;
+        siyiConfig["compressorMode"] = siyiCompressor;
+        if (siyiCompressor) {
+            siyiConfig["videoIP"] = siyiVideoIP;
+            siyiConfig["controlIP"] = siyiControlIP;
+        } else {
+            siyiConfig["ip"] = siyiIP;
+        }
         obj["siyiConfig"] = siyiConfig;
-        qDebug() << "[VIDEO_SOURCE] SIYI config added to JSON";
+        qDebug() << "[VIDEO_SOURCE] SIYI config added to JSON (compressor:" << siyiCompressor << ")";
     }
     
     // Add AI config if valid
@@ -1492,6 +1043,9 @@ void MainWindow::saveConfig() {
     QString siyiIP = ui->siyi_lineEditIP ? ui->siyi_lineEditIP->text().trimmed() : "";
     int siyiPort = ui->siyi_lineEditPort ? ui->siyi_lineEditPort->text().toInt() : 0;
     QString siyiPath = ui->siyi_lineEditPath ? ui->siyi_lineEditPath->text().trimmed() : "";
+    bool siyiCompressor = ui->siyi_checkBoxCompressor ? ui->siyi_checkBoxCompressor->isChecked() : false;
+    QString siyiVideoIP = ui->siyi_lineEditVideoIP ? ui->siyi_lineEditVideoIP->text().trimmed() : "";
+    QString siyiControlIP = ui->siyi_lineEditControlIP ? ui->siyi_lineEditControlIP->text().trimmed() : "";
     
     QString aiCameraIP = ui->ai_lineEditCameraIP ? ui->ai_lineEditCameraIP->text().trimmed() : "";
     int aiControlPort = ui->ai_lineEditControlPort ? ui->ai_lineEditControlPort->text().toInt() : 0;
@@ -1509,11 +1063,16 @@ void MainWindow::saveConfig() {
     qDebug() << "[VIDEO_SOURCE] Selected video source for saving:" << videoSource << "(index:" << (ui->videoSourceComboBox ? ui->videoSourceComboBox->currentIndex() : -1) << ")";
     
     // Validate configurations
-    bool siyiValid = !siyiIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    bool siyiValid = false;
+    if (siyiCompressor) {
+        siyiValid = !siyiVideoIP.isEmpty() && !siyiControlIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    } else {
+        siyiValid = !siyiIP.isEmpty() && siyiPort > 0 && !siyiPath.isEmpty();
+    }
     bool aiValid = !aiCameraIP.isEmpty() && aiControlPort > 0 && !aiPath.isEmpty();
     bool servoValid = !servoIP.isEmpty() && servoPort > 0;
     
-    qDebug() << "[VIDEO_SOURCE] Config validation - SIYI:" << siyiValid << "AI:" << aiValid << "Servo:" << servoValid;
+    qDebug() << "[VIDEO_SOURCE] Config validation - SIYI:" << siyiValid << "AI:" << aiValid << "Servo:" << servoValid << "Compressor:" << siyiCompressor;
     
     // At least one configuration must be valid
     if (!siyiValid && !aiValid) {
@@ -1528,11 +1087,17 @@ void MainWindow::saveConfig() {
     // Add SIYI config if valid
     if (siyiValid) {
         QJsonObject siyiConfig;
-        siyiConfig["ip"] = siyiIP;
         siyiConfig["port"] = siyiPort;
         siyiConfig["path"] = siyiPath;
+        siyiConfig["compressorMode"] = siyiCompressor;
+        if (siyiCompressor) {
+            siyiConfig["videoIP"] = siyiVideoIP;
+            siyiConfig["controlIP"] = siyiControlIP;
+        } else {
+            siyiConfig["ip"] = siyiIP;
+        }
         obj["siyiConfig"] = siyiConfig;
-        qDebug() << "[VIDEO_SOURCE] SIYI config added to JSON";
+        qDebug() << "[VIDEO_SOURCE] SIYI config added to JSON (compressor:" << siyiCompressor << ")";
     }
     
     // Add AI config if valid
@@ -1600,6 +1165,11 @@ void MainWindow::onSiyiDefaultClicked()
     if (ui->siyi_lineEditIP)   ui->siyi_lineEditIP->setText(defaultIP);
     if (ui->siyi_lineEditPort) ui->siyi_lineEditPort->setText(QString::number(defaultPort));
     if (ui->siyi_lineEditPath) ui->siyi_lineEditPath->setText(defaultPath);
+
+    // Reset compressor mode to off
+    if (ui->siyi_checkBoxCompressor) ui->siyi_checkBoxCompressor->setChecked(false);
+    if (ui->siyi_lineEditVideoIP)    ui->siyi_lineEditVideoIP->clear();
+    if (ui->siyi_lineEditControlIP)  ui->siyi_lineEditControlIP->clear();
 
     // Ensure we show the SIYI page
     if (ui->cameraTypeStack) ui->cameraTypeStack->setCurrentWidget(ui->page_siyi);
@@ -1714,238 +1284,343 @@ bool MainWindow::validateConfiguration(const QString& cameraType)
 }
 
 
+// ===========================================================================
+// Section-based overlay controller
+// ===========================================================================
+
+void MainWindow::setOverlaySection(OverlaySection section, const QString& text)
+{
+    int idx = static_cast<int>(section);
+    if (idx < 0 || idx >= kOverlaySectionCount) return;
+    overlaySections_[idx] = text;
+    renderOverlay();
+}
+
+void MainWindow::clearOverlaySection(OverlaySection section)
+{
+    int idx = static_cast<int>(section);
+    if (idx < 0 || idx >= kOverlaySectionCount) return;
+    overlaySections_[idx].clear();
+    renderOverlay();
+}
+
+void MainWindow::renderOverlay()
+{
+    if (!overlayRenderTimer_) {
+        overlayRenderTimer_ = new QTimer(this);
+        overlayRenderTimer_->setSingleShot(true);
+        overlayRenderTimer_->setInterval(0);
+        connect(overlayRenderTimer_, &QTimer::timeout, this, &MainWindow::doRenderOverlay);
+    }
+    if (!overlayRenderTimer_->isActive())
+        overlayRenderTimer_->start();
+}
+
+void MainWindow::doRenderOverlay()
+{
+    if (!configDisplayLabel) {
+        setupConfigOverlayLabel();
+    }
+
+    if (currentOverlayMode_ == OverlayMode::Off) {
+        configDisplayLabel->setVisible(false);
+        return;
+    }
+
+    // Determine which sections to show based on mode
+    // StreamConfig  → Config (0) + VideoStream (1)
+    // RealTimeStats → Bandwidth (2) + Connectivity (3)
+    int startIdx = 0, endIdx = kOverlaySectionCount;
+    if (currentOverlayMode_ == OverlayMode::StreamConfig) {
+        startIdx = static_cast<int>(OverlaySection::Config);
+        endIdx   = static_cast<int>(OverlaySection::Bandwidth);   // exclusive
+    } else if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        startIdx = static_cast<int>(OverlaySection::Bandwidth);
+        endIdx   = kOverlaySectionCount;
+    }
+
+    // Join non-empty sections with separator lines
+    QString displayText;
+    for (int i = startIdx; i < endIdx; ++i) {
+        if (overlaySections_[i].isEmpty()) continue;
+        if (!displayText.isEmpty()) {
+            displayText += QStringLiteral("\n---\n");
+        }
+        displayText += overlaySections_[i];
+    }
+
+    if (displayText.isEmpty()) {
+        displayText = QStringLiteral("No data available");
+    }
+
+    configDisplayLabel->setText(displayText);
+
+    // Calculate required height from text, clamp to max
+    QFontMetrics fm(configDisplayLabel->font());
+    int padding = 20; // 10px padding top + bottom from stylesheet
+    int textHeight = fm.boundingRect(
+        QRect(0, 0, configDisplayLabel->width() - padding, 10000),
+        Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap,
+        displayText).height();
+    int labelHeight = qBound(100, textHeight + padding, 800);
+    configDisplayLabel->setFixedHeight(labelHeight);
+
+    configDisplayLabel->setVisible(true);
+    configDisplayLabel->raise();
+    configDisplayLabel->update(); // force full repaint to clear ghost pixels
+}
+
+// ---------------------------------------------------------------------------
+// updateConfigDisplay — refreshes sections relevant to the current mode
+// ---------------------------------------------------------------------------
 void MainWindow::updateConfigDisplay()
 {
     if (!configDisplayLabel) {
-        configDisplayLabel = new QLabel(ui->VideoRecorderSection);
-        configDisplayLabel->setGeometry(10, 30, 250, 500);
-        configDisplayLabel->setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 11px;");
-        configDisplayLabel->setWordWrap(true);
-        configDisplayLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-        configDisplayLabel->setVisible(false);
+        setupConfigOverlayLabel();
     }
-    
-    if (!showConfigOverlay) {
+
+    if (currentOverlayMode_ == OverlayMode::Off) {
         configDisplayLabel->setVisible(false);
         return;
     }
-    
-    // Read from JSON config file instead of UI fields
+
+    // Refresh only sections relevant to the active mode
+    if (currentOverlayMode_ == OverlayMode::StreamConfig) {
+        refreshOverlayConfigSection();
+        refreshOverlayVideoSection();
+    } else if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        refreshOverlayBandwidthSection();
+        refreshOverlayConnectivitySection();
+    }
+
+    // Single render pass
+    renderOverlay();
+}
+
+// ---------------------------------------------------------------------------
+// Section 0 — Camera configuration (from JSON file)
+// ---------------------------------------------------------------------------
+void MainWindow::refreshOverlayConfigSection()
+{
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
     QDir dir(configDir);
     QString cfgFile = dir.filePath("Haxa5Camera/Hexa5CameraConfig.json");
-    
-    QString displayText;
-    
+
     QFile f(cfgFile);
     if (!f.open(QIODevice::ReadOnly)) {
-        displayText = "No configuration saved yet";
-        configDisplayLabel->setText(displayText);
-        configDisplayLabel->setVisible(true);
+        overlaySections_[static_cast<int>(OverlaySection::Config)] =
+            QStringLiteral("No configuration saved yet");
         return;
     }
-    
+
     QByteArray data = f.readAll();
     f.close();
-    
+
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (!doc.isObject()) {
-        displayText = "Invalid configuration file";
-        configDisplayLabel->setText(displayText);
-        configDisplayLabel->setVisible(true);
+        overlaySections_[static_cast<int>(OverlaySection::Config)] =
+            QStringLiteral("Invalid configuration file");
         return;
     }
-    
+
     QJsonObject obj = doc.object();
-    
-    // Check if this is old format for backward compatibility
+    QString text;
+
+    // Legacy format
     if (obj.contains("cameraType")) {
         QString cameraType = obj.value("cameraType").toString("siyi").toUpper();
-        displayText = QString("LEGACY FORMAT\nCamera Type: %1\n").arg(cameraType);
-        
+        text = QString("LEGACY FORMAT\nCamera Type: %1\n").arg(cameraType);
+
         if (cameraType == "SIYI") {
-            QString ip = obj.value("ip").toString("N/A");
-            int port = obj.value("port").toInt(0);
+            QString ip   = obj.value("ip").toString("N/A");
+            int    port  = obj.value("port").toInt(0);
             QString path = obj.value("path").toString("N/A");
-            
-            displayText += QString("IP: %1\nPort: %2\nPath: %3")
-                          .arg(ip)
-                          .arg(port)
-                          .arg(path);
-            
-            // Add RTSP URL for legacy SIYI format
-            if (ip != "N/A" && port > 0 && path != "N/A") {
-                QString rtspUrl = QString("rtsp://%1:%2%3").arg(ip).arg(port).arg(path);
-                displayText += QString("\nRTSP URL: %1").arg(rtspUrl);
-            }
+            text += QString("IP: %1\nPort: %2\nPath: %3").arg(ip).arg(port).arg(path);
+            if (ip != "N/A" && port > 0 && path != "N/A")
+                text += QString("\nRTSP: rtsp://%1:%2%3").arg(ip).arg(port).arg(path);
         } else if (cameraType == "AI") {
-            QString aiCameraIP = obj.value("aiCameraIP").toString("N/A");
-            int aiControlPort = obj.value("aiControlPort").toInt(0);
-            QString aiPath = obj.value("path").toString("/ai/stream"); // Default path for legacy AI
-            
-            displayText += QString("Camera IP: %1\nControl Port: %2\nPath: %3")
-                          .arg(aiCameraIP)
-                          .arg(aiControlPort)
-                          .arg(aiPath);
-            
-            // Add RTSP URL for legacy AI format if path available
-            if (aiCameraIP != "N/A" && aiControlPort > 0) {
-                QString rtspUrl = QString("rtsp://%1:%2%3").arg(aiCameraIP).arg(aiControlPort).arg(aiPath);
-                displayText += QString("\nRTSP URL: %1").arg(rtspUrl);
-            }
+            QString ip   = obj.value("aiCameraIP").toString("N/A");
+            int    port  = obj.value("aiControlPort").toInt(0);
+            QString path = obj.value("path").toString("/ai/stream");
+            text += QString("Camera IP: %1\nControl Port: %2\nPath: %3").arg(ip).arg(port).arg(path);
+            if (ip != "N/A" && port > 0)
+                text += QString("\nRTSP: rtsp://%1:%2%3").arg(ip).arg(port).arg(path);
         }
-        
-        configDisplayLabel->setText(displayText);
-        configDisplayLabel->setVisible(true);
+
+        overlaySections_[static_cast<int>(OverlaySection::Config)] = text;
         return;
     }
-    
-    // Display new parallel format
+
+    // New parallel format
     QString videoSource = obj.value("videoSource").toString("siyi").toUpper();
-    displayText = QString("Video Source: %1\n").arg(videoSource);
-    
-    // Show SIYI config if present
+    text = QString("[Configuration]\nVideo Source: %1").arg(videoSource);
+
+    // SIYI
     if (obj.contains("siyiConfig")) {
-        QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
-        QString siyiIP = siyiConfig.value("ip").toString("N/A");
-        int siyiPort = siyiConfig.value("port").toInt(0);
-        QString siyiPath = siyiConfig.value("path").toString("N/A");
-        
-        displayText += QString("\n[SIYI Camera]\nIP: %1\nPort: %2\nPath: %3")
-                      .arg(siyiIP)
-                      .arg(siyiPort)
-                      .arg(siyiPath);
-        
-        // Add RTSP URL for SIYI if it's the active source
-        if (videoSource == "SIYI" && siyiIP != "N/A" && siyiPort > 0 && siyiPath != "N/A") {
-            QString rtspUrl = QString("rtsp://%1:%2%3").arg(siyiIP).arg(siyiPort).arg(siyiPath);
-            displayText += QString("\nRTSP URL: %1").arg(rtspUrl);
+        QJsonObject sc = obj.value("siyiConfig").toObject();
+        bool compressor = sc.value("compressorMode").toBool(false);
+        int    port  = sc.value("port").toInt(0);
+        QString path = sc.value("path").toString("N/A");
+
+        text += QStringLiteral("\n\n[SIYI Camera]");
+        if (compressor) {
+            QString videoIp   = sc.value("videoIP").toString("N/A");
+            QString controlIp = sc.value("controlIP").toString("N/A");
+            text += QString("\nMode: Compressor\nVideo IP: %1\nControl IP: %2\nPort: %3\nPath: %4")
+                        .arg(videoIp).arg(controlIp).arg(port).arg(path);
+            if (videoIp != "N/A" && port > 0 && path != "N/A")
+                text += QString("\nRTSP: rtsp://%1:%2%3").arg(videoIp).arg(port).arg(path);
+        } else {
+            QString ip = sc.value("ip").toString("N/A");
+            text += QString("\nIP: %1\nPort: %2\nPath: %3").arg(ip).arg(port).arg(path);
+            if (ip != "N/A" && port > 0 && path != "N/A")
+                text += QString("\nRTSP: rtsp://%1:%2%3").arg(ip).arg(port).arg(path);
         }
+        if (videoSource == "SIYI")
+            text += QStringLiteral("\n>> Active Source");
     }
-    
-    // Show AI config if present
+
+    // AI
     if (obj.contains("aiConfig")) {
-        QJsonObject aiConfig = obj.value("aiConfig").toObject();
-        QString aiCameraIP = aiConfig.value("cameraIP").toString("N/A");
-        int aiControlPort = aiConfig.value("controlPort").toInt(0);
-        QString aiPath = aiConfig.value("path").toString("N/A");
-        
-        displayText += QString("\n[AI Camera]\nCamera IP: %1\nControl Port: %2\nPath: %3")
-                      .arg(aiCameraIP)
-                      .arg(aiControlPort)
-                      .arg(aiPath);
-        
-        // Add RTSP URL for AI if it's the active source
-        if (videoSource == "AI" && aiCameraIP != "N/A" && aiControlPort > 0 && aiPath != "N/A") {
-            QString rtspUrl = QString("rtsp://%1:%2%3").arg(aiCameraIP).arg(aiControlPort).arg(aiPath);
-            displayText += QString("\nRTSP URL: %1").arg(rtspUrl);
-        }
+        QJsonObject ac = obj.value("aiConfig").toObject();
+        QString ip   = ac.value("cameraIP").toString("N/A");
+        int    port  = ac.value("controlPort").toInt(0);
+        QString path = ac.value("path").toString("N/A");
+
+        text += QString("\n\n[AI Camera]\nCamera IP: %1\nControl Port: %2\nPath: %3").arg(ip).arg(port).arg(path);
+        if (ip != "N/A" && port > 0 && path != "N/A")
+            text += QString("\nRTSP: rtsp://%1:%2%3").arg(ip).arg(port).arg(path);
+        if (videoSource == "AI")
+            text += QStringLiteral("\n>> Active Source");
     }
-    
-    // Add RTSP URL for the active video source summary
-    displayText += QString("\n---\nActive RTSP: ");
-    
-    if (videoSource == "SIYI" && obj.contains("siyiConfig")) {
-        QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
-        QString siyiIP = siyiConfig.value("ip").toString("N/A");
-        int siyiPort = siyiConfig.value("port").toInt(0);
-        QString siyiPath = siyiConfig.value("path").toString("N/A");
-        
-        if (siyiIP != "N/A" && siyiPort > 0 && siyiPath != "N/A") {
-            QString rtspUrl = QString("rtsp://%1:%2%3").arg(siyiIP).arg(siyiPort).arg(siyiPath);
-            displayText += rtspUrl;
-            
-            // Check if video is being displayed
-            if (cameraController && cameraController->isRunning() && !videoCharacteristics.isEmpty()) {
-                displayText += "\nStatus: Displayed in Main View";
-            }
-        } else {
-            displayText += "Invalid SIYI config";
-        }
-    } else if (videoSource == "AI" && obj.contains("aiConfig")) {
-        QJsonObject aiConfig = obj.value("aiConfig").toObject();
-        QString aiCameraIP = aiConfig.value("cameraIP").toString("N/A");
-        int aiControlPort = aiConfig.value("controlPort").toInt(0);
-        QString aiPath = aiConfig.value("path").toString("N/A");
-        
-        if (aiCameraIP != "N/A" && aiControlPort > 0 && aiPath != "N/A") {
-            QString rtspUrl = QString("rtsp://%1:%2%3").arg(aiCameraIP).arg(aiControlPort).arg(aiPath);
-            displayText += rtspUrl;
-            
-            // Check if video is being displayed
-            if (cameraController && cameraController->isRunning() && !videoCharacteristics.isEmpty()) {
-                displayText += "\nStatus: Displayed in Main View";
-            }
-        } else {
-            displayText += "Invalid AI config";
-        }
-    } else {
-        displayText += "No valid config";
-    }
-    
-    // Add video characteristics if available
-    if (!videoCharacteristics.isEmpty() && cameraController && cameraController->isRunning()) {
-        displayText += QString("\n---\n[Video Stream Analysis]\n%1").arg(videoCharacteristics);
-    }
-    
-    // Show Servo config if present (legacy)
+
+    // Servo (legacy)
     if (obj.contains("servoConfig")) {
-        QJsonObject servoConfig = obj.value("servoConfig").toObject();
-        displayText += QString("\n[Servo]\nIP: %1\nPort: %2")
-                      .arg(servoConfig.value("servoIP").toString("N/A"))
-                      .arg(servoConfig.value("servoPort").toInt(0));
+        QJsonObject sv = obj.value("servoConfig").toObject();
+        text += QString("\n\n[Servo]\nIP: %1\nPort: %2")
+                .arg(sv.value("servoIP").toString("N/A"))
+                .arg(sv.value("servoPort").toInt(0));
     }
-    
-    // Add connectivity information section
-    displayText += QString("\n---\n[Connectivity Status]");
-    
-    if (!pingWatcher) {
-        displayText += "\nStatus: Initializing...";
-    } else {
-        // Get all configured camera IPs
-        QMap<QString, QString> cameraIps = loadAllCameraIps();
-        
-        if (cameraIps.isEmpty()) {
-            displayText += "\nNo cameras configured";
+
+    overlaySections_[static_cast<int>(OverlaySection::Config)] = text;
+}
+
+// ---------------------------------------------------------------------------
+// Section 1 — Video stream analysis
+// ---------------------------------------------------------------------------
+void MainWindow::refreshOverlayVideoSection()
+{
+    int idx = static_cast<int>(OverlaySection::VideoStream);
+
+    bool playing = videoWidget && videoWidget->getReceiver()
+                   && videoWidget->getReceiver()->isPlaying();
+
+    if (!playing || videoCharacteristics.isEmpty()) {
+        overlaySections_[idx].clear();
+        return;
+    }
+
+    overlaySections_[idx] = QString("[Video Stream Analysis]\n%1").arg(videoCharacteristics);
+}
+
+// ---------------------------------------------------------------------------
+// Section 2 — Bandwidth monitoring
+// ---------------------------------------------------------------------------
+void MainWindow::refreshOverlayBandwidthSection()
+{
+    int idx = static_cast<int>(OverlaySection::Bandwidth);
+
+    if (currentBandwidthStats_.frame_count == 0) {
+        overlaySections_[idx].clear();
+        return;
+    }
+
+    const auto& s = currentBandwidthStats_;
+    QString text = QStringLiteral("[Bandwidth Monitoring]");
+    text += QString("\nCurrent: %1 kbps (%2 Mbps)")
+            .arg(s.current_kbps, 0, 'f', 1)
+            .arg(s.current_kbps / 1000.0, 0, 'f', 2);
+    text += QString("\nAverage: %1 kbps (%2 Mbps)")
+            .arg(s.average_kbps, 0, 'f', 1)
+            .arg(s.average_kbps / 1000.0, 0, 'f', 2);
+    text += QString("\nPeak: %1 kbps (%2 Mbps)")
+            .arg(s.peak_kbps, 0, 'f', 1)
+            .arg(s.peak_kbps / 1000.0, 0, 'f', 2);
+    text += QString("\nTotal: %1 KB (%2 MB)")
+            .arg(s.total_bytes / 1024)
+            .arg(s.total_bytes / (1024 * 1024));
+    text += QString("\nFrames: %1").arg(s.frame_count);
+    text += QString("\nElapsed: %1 s").arg(s.elapsed_seconds, 0, 'f', 1);
+
+    overlaySections_[idx] = text;
+}
+
+// ---------------------------------------------------------------------------
+// Section 3 — Connectivity status
+// ---------------------------------------------------------------------------
+void MainWindow::refreshOverlayConnectivitySection()
+{
+    int idx = static_cast<int>(OverlaySection::Connectivity);
+
+    QString text = QStringLiteral("[Connectivity Status]");
+
+    // --- Stream Health (from VideoReceiver buffer probe) ---
+    {
+        bool streamActive = videoWidget && videoWidget->getReceiver()
+                            && videoWidget->getReceiver()->isPlaying();
+
+        if (streamActive && currentStreamHealth_.totalBuffersReceived > 0) {
+            QString flowIcon = currentStreamHealth_.dataFlowing
+                               ? QStringLiteral("🟢") : QStringLiteral("🔴");
+            text += QString("\n%1 Stream: %2  (last buf %3s ago)")
+                    .arg(flowIcon)
+                    .arg(currentStreamHealth_.dataFlowing
+                         ? QStringLiteral("data flowing")
+                         : QStringLiteral("stalled"))
+                    .arg(currentStreamHealth_.secondsSinceLastBuffer, 0, 'f', 1);
+        } else if (streamActive) {
+            text += QStringLiteral("\n⏳ Stream: waiting for data...");
         } else {
-            int reachableCount = 0;
-            int totalCount = cameraIps.size();
-            
-            for (auto it = cameraIps.begin(); it != cameraIps.end(); ++it) {
-                QString cameraType = it.key();
-                QString cameraIp = it.value();
-                
-                HostConnectivityScore score = pingWatcher->getConnectivityScore(cameraType);
-                
-                QString statusIcon = score.isReachable ? "🟢" : "🔴";
-                QString rttInfo = score.isReachable ? QString("%1ms").arg(score.currentRtt) : QString("%1 failures").arg(score.consecutiveFailures);
-                QString scoreInfo = QString("(%1%)").arg(score.overallScore);
-                
-                displayText += QString("\n%1 %2: %3 %4")
-                              .arg(statusIcon)
-                              .arg(cameraType)
-                              .arg(rttInfo)
-                              .arg(scoreInfo);
-                
-                if (score.isReachable) {
-                    reachableCount++;
-                }
-            }
-            
-            // Add summary
-            displayText += QString("\nSummary: %1/%2 reachable")
-                          .arg(reachableCount)
-                          .arg(totalCount);
-            
-            // Add last update time
-            displayText += QString("\nLast update: %1")
-                          .arg(QDateTime::currentDateTime().toString("hh:mm:ss"));
+            text += QStringLiteral("\n⚫ Stream: not active");
         }
     }
-    
-    configDisplayLabel->setText(displayText);
-    configDisplayLabel->setVisible(true);
-    configDisplayLabel->raise(); // Ensure overlay stays on top
+
+    // --- Host Reachability (ping-based) ---
+    if (!pingWatcher) {
+        text += QStringLiteral("\nPing: initializing...");
+        overlaySections_[idx] = text;
+        return;
+    }
+
+    QMap<QString, QString> cameraIps = loadAllCameraIps();
+    if (cameraIps.isEmpty()) {
+        text += QStringLiteral("\nNo cameras configured");
+        overlaySections_[idx] = text;
+        return;
+    }
+
+    int reachableCount = 0;
+    int totalCount = cameraIps.size();
+
+    for (auto it = cameraIps.begin(); it != cameraIps.end(); ++it) {
+        HostConnectivityScore score = pingWatcher->getConnectivityScore(it.key());
+
+        QString icon = score.isReachable ? QStringLiteral("🟢") : QStringLiteral("🔴");
+        QString info = score.isReachable
+                       ? QString("%1ms").arg(score.currentRtt)
+                       : QString("%1 failures").arg(score.consecutiveFailures);
+
+        text += QString("\n%1 %2: %3 (%4%)")
+                .arg(icon, it.key(), info)
+                .arg(score.overallScore);
+
+        if (score.isReachable) reachableCount++;
+    }
+
+    text += QString("\nSummary: %1/%2 reachable").arg(reachableCount).arg(totalCount);
+    text += QString("\nUpdated: %1").arg(QDateTime::currentDateTime().toString("hh:mm:ss"));
+
+    overlaySections_[idx] = text;
 }
 
 
@@ -1971,6 +1646,45 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
     
+    // ── ROI mouse handling on videoWidget ──
+    if (m_roiActive && watched == videoWidget) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_roiDragging = true;
+                m_roiOrigin = me->pos();
+                showRoiRect(QRect(m_roiOrigin, QSize(1, 1)));
+                return true;
+            } else if (me->button() == Qt::RightButton) {
+                m_roiDragging = false;
+                hideRoiRect();
+                onRoiReset();
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove && m_roiDragging) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            showRoiRect(QRect(m_roiOrigin, me->pos()).normalized());
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && m_roiDragging) {
+                m_roiDragging = false;
+                QRect sel = QRect(m_roiOrigin, me->pos()).normalized();
+                hideRoiRect();
+                // Ignore tiny accidental clicks
+                if (sel.width() >= 10 && sel.height() >= 10) {
+                    qreal w = videoWidget->width();
+                    qreal h = videoWidget->height();
+                    QRectF norm(sel.x() / w, sel.y() / h,
+                                sel.width() / w, sel.height() / h);
+                    norm = norm.intersected(QRectF(0.0, 0.0, 1.0, 1.0));
+                    onRoiSelected(norm);
+                }
+                return true;
+            }
+        }
+    }
+
     // Handle hover expansion for right panel
     if (event->type() == QEvent::MouseMove && watched == this) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
@@ -2004,21 +1718,58 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 }
 
 
-void MainWindow::onShowConfigToggled(bool enabled)
+void MainWindow::onOverlayModeChanged(int index)
 {
-    showConfigOverlay = enabled;
+    currentOverlayMode_ = static_cast<OverlayMode>(index);
+
+    // Manage the 1-second timer for RealTimeStats
+    if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        if (!realtimeStatsTimer_) {
+            realtimeStatsTimer_ = new QTimer(this);
+            realtimeStatsTimer_->setInterval(1000);
+            connect(realtimeStatsTimer_, &QTimer::timeout, this, [this]() {
+                if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+                    refreshOverlayBandwidthSection();
+                    refreshOverlayConnectivitySection();
+                    renderOverlay();
+                }
+            });
+        }
+        realtimeStatsTimer_->start();
+    } else {
+        if (realtimeStatsTimer_) {
+            realtimeStatsTimer_->stop();
+        }
+    }
+
+    // Clear all sections before switching
+    for (int i = 0; i < kOverlaySectionCount; ++i)
+        overlaySections_[i].clear();
+
     updateConfigDisplay();
 }
 
 void MainWindow::setVideoCharacteristics(const QString& characteristics)
 {
     videoCharacteristics = characteristics;
-    // Update display if overlay is visible
-    if (showConfigOverlay) {
-        updateConfigDisplay();
+    if (currentOverlayMode_ == OverlayMode::StreamConfig) {
+        refreshOverlayVideoSection();
+        renderOverlay();
     }
 }
 
+void MainWindow::onBandwidthUpdated(const BandwidthStats& stats)
+{
+    currentBandwidthStats_ = stats;
+    // Note: RealTimeStats updates are handled by the 1-second timer.
+    // No need to render on every bandwidth callback to avoid excessive redraws.
+}
+
+void MainWindow::onStreamHealthUpdated(const StreamHealthInfo& info)
+{
+    currentStreamHealth_ = info;
+    // Consumed by refreshOverlayConnectivitySection via the 1-second timer.
+}
 
 void MainWindow::saveDefaultConfig() {
     // Default configuration values:
@@ -2117,41 +1868,46 @@ void MainWindow::handleCommandFeedback(const QString& commandId, bool success) {
 
 
 void killExistingInstances_() {
-    FILE* pipe = popen("ps -aux | grep JoystickIdentifier | grep -v grep", "r");
-    if (!pipe) {
-        perror("popen failed");
-        return;
-    }
+    // Get our own binary name from /proc/self/exe so it works regardless
+    // of what the binary is called (JoystickIdentifier, HexaCam, etc.)
+    pid_t self = getpid();
+    char exePath[4096] = {};
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len <= 0) return;
+    exePath[len] = '\0';
+
+    // Extract just the filename (basename)
+    std::string fullPath(exePath);
+    std::string binaryName = fullPath.substr(fullPath.rfind('/') + 1);
+
+    // Find all processes matching this binary name, excluding ourselves
+    std::string cmd = "pgrep -f " + binaryName;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return;
 
     std::vector<pid_t> pids;
-    char buffer[256];
-    
+    char buffer[64];
     while (fgets(buffer, sizeof(buffer), pipe)) {
-        std::string line(buffer);
-        std::istringstream iss(line);
-        std::vector<std::string> tokens;
-        std::string token;
-        
-        while (iss >> token) {
-            tokens.push_back(token);
-        }
-        
-        if (tokens.size() > 1) {
-            try {
-                pid_t pid = static_cast<pid_t>(std::stoi(tokens[1]));
-                pids.push_back(pid);
-            } catch (const std::exception& e) {
-                // Invalid PID format, skip
-            }
-        }
+        try {
+            pid_t pid = static_cast<pid_t>(std::stoi(std::string(buffer)));
+            if (pid != self) pids.push_back(pid);
+        } catch (...) {}
     }
     pclose(pipe);
 
+    // First try SIGTERM for graceful shutdown
     for (pid_t pid : pids) {
-        if (kill(pid, SIGKILL) == 0) {
-            printf("Killed process %d\n", pid);
-        } else {
-            perror(("Failed to kill process " + std::to_string(pid)).c_str());
+        kill(pid, SIGTERM);
+    }
+
+    // Give them 2 seconds, then SIGKILL any survivors
+    if (!pids.empty()) {
+        usleep(2000000);
+        for (pid_t pid : pids) {
+            if (kill(pid, 0) == 0) {  // still alive?
+                kill(pid, SIGKILL);
+                qDebug() << "[Shutdown] Force-killed lingering process" << pid;
+            }
         }
     }
 }
@@ -2176,32 +1932,51 @@ void MainWindow::resizeEvent(QResizeEvent *ev) {
         recordOverlay->setFixedWidth(videoWidget->width());
         recordOverlay->move(0, 0);
     }
+
 }
 
 void MainWindow::closeEvent(QCloseEvent* ev)
 {
-    // 1) gracefully shut down the stream
-    if (videoWidget) {
-        auto *rcv = videoWidget->getReceiver();
-        if (rcv) {
-            // asynchronously stop the pipeline
-            auto future = QtConcurrent::run([rcv]() {
-                rcv->stop();     // this will block—but not on the GUI thread
-            });
-            (void)future; // Suppress unused variable warning
-        }
+    {
+        QMutexLocker lk(&shutdownMutex);
+        if (isShuttingDown) { ev->accept(); return; }
+        isShuttingDown = true;
     }
 
-    // 2) (optional) kill any *other* instances—but do NOT SIGKILL your own PID
-    killExistingInstances_(); // ← drop this
+    qDebug() << "[Shutdown] closeEvent: starting graceful shutdown";
 
-    // 3) Finish closing
+    // 1) Stop the recording pipeline if active
+    if (recordPipeline) {
+        gst_element_send_event(recordPipeline, gst_event_new_eos());
+        GstBus *bus = gst_element_get_bus(recordPipeline);
+        if (bus) {
+            GstMessage *msg = gst_bus_timed_pop_filtered(bus, 2 * GST_SECOND,
+                static_cast<GstMessageType>(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+            if (msg) gst_message_unref(msg);
+            gst_object_unref(bus);
+        }
+        gst_element_set_state(recordPipeline, GST_STATE_NULL);
+        gst_object_unref(recordPipeline);
+        recordPipeline = nullptr;
+    }
+
+    // 2) Stop the ping watcher
+    if (pingWatcher) {
+        pingWatcher->stopWatching();
+    }
+
+    // 3) Stop the video pipeline
+    if (videoWidget) {
+        auto *rcv = videoWidget->getReceiver();
+        if (rcv) rcv->stop();
+    }
+
+    // 4) Kill other instances of this binary (not ourselves)
+    killExistingInstances_();
+
+    // 5) Finish closing
     QMainWindow::closeEvent(ev);
     QCoreApplication::quit();
-
-    // if (_servo && _servo->isConnected()) {
-    //     _servo->disconnect();
-    // }
 }
 
 
@@ -2217,10 +1992,13 @@ void MainWindow::onCameraError(const QString &message) {
     ui->lineEditCameraStatus->setText(message);
     ui->lineEditCameraStatus->setStyleSheet(
         "background-color: #ff4444; color: white;");
-    // Clear video characteristics when stream stops
+    // Clear video characteristics and bandwidth stats when stream stops
     videoCharacteristics.clear();
-    if (showConfigOverlay) {
-        updateConfigDisplay();
+    currentBandwidthStats_ = BandwidthStats{};
+    if (currentOverlayMode_ != OverlayMode::Off) {
+        overlaySections_[static_cast<int>(OverlaySection::VideoStream)].clear();
+        overlaySections_[static_cast<int>(OverlaySection::Bandwidth)].clear();
+        renderOverlay();
     }
 }
 
@@ -2249,6 +2027,18 @@ QString MainWindow::loadControlIp() const
         return defaultIp;
 
     auto obj = doc.object();
+
+    // Handle new parallel format
+    if (obj.contains("siyiConfig")) {
+        QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
+        bool compressorMode = siyiConfig.value("compressorMode").toBool(false);
+        if (compressorMode) {
+            return siyiConfig.value("controlIP").toString(defaultIp);
+        }
+        return siyiConfig.value("ip").toString(defaultIp);
+    }
+
+    // Legacy fallback
     return obj.value("ip").toString(defaultIp);
 }
 
@@ -2274,12 +2064,24 @@ QMap<QString, QString> MainWindow::loadAllCameraIps() const
 
     auto obj = doc.object();
     
-    // Extract SIYI camera IP
+    // Extract SIYI camera IP(s)
     if (obj.contains("siyiConfig")) {
         QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
-        QString siyiIp = siyiConfig.value("ip").toString();
-        if (!siyiIp.isEmpty()) {
-            cameraIps["SIYI"] = siyiIp;
+        bool compressorMode = siyiConfig.value("compressorMode").toBool(false);
+        if (compressorMode) {
+            QString videoIp = siyiConfig.value("videoIP").toString();
+            QString controlIp = siyiConfig.value("controlIP").toString();
+            if (!videoIp.isEmpty()) {
+                cameraIps["SIYI-Video"] = videoIp;
+            }
+            if (!controlIp.isEmpty()) {
+                cameraIps["SIYI-Control"] = controlIp;
+            }
+        } else {
+            QString siyiIp = siyiConfig.value("ip").toString();
+            if (!siyiIp.isEmpty()) {
+                cameraIps["SIYI"] = siyiIp;
+            }
         }
     }
     
@@ -2328,21 +2130,18 @@ QString MainWindow::getCurrentVideoSource() const
 }
 
 void MainWindow::refreshCameraStatus() {
-    // Use the continuous ping watcher instead of one-time ping
-    if (pingWatcher && pingWatcher->isWatching()) {
-        qDebug() << "[PING_WATCHER] Continuous monitoring already active";
-        return;
+    // The continuous ping watcher handles monitoring autonomously.
+    // Only (re-)initialize if it isn't running yet.
+    if (!pingWatcher || !pingWatcher->isWatching()) {
+        initializePingWatcher();
     }
-    
-    // Initialize ping watcher for single status check
-    initializePingWatcher();
 }
 
 void MainWindow::refreshAllCameraStatus() {
-    LOG_IP_WATCHDOG() << "Starting comprehensive IP monitoring for all cameras";
-    
-    // Use the continuous ping watcher instead of one-time pings
-    initializePingWatcher();
+    // Same as refreshCameraStatus — the watcher is self-sustaining.
+    if (!pingWatcher || !pingWatcher->isWatching()) {
+        initializePingWatcher();
+    }
 }
 
 #include <signal.h>  // for SIGINT
@@ -2362,8 +2161,15 @@ void MainWindow::on_RecordButton_clicked()
         }
     }
 
-    // 1) Trim any stray newline
-    QString uri = rtspUri.trimmed();
+    // Always use the current URI from the receiver (rtspUri member may be stale)
+    QString uri;
+    if (auto *vr = videoWidget->getReceiver()) {
+        uri = vr->getRtspUriFromConfig().trimmed();
+    }
+    if (uri.isEmpty()) {
+        QMessageBox::warning(this, tr("Recording"), tr("No RTSP URI configured."));
+        return;
+    }
 
     if (recordState == RecordState::Idle) {
         // ── START RECORDING ──
@@ -2375,36 +2181,38 @@ void MainWindow::on_RecordButton_clicked()
                          .toString("yyyyMMdd_hhmmss") + ".mp4";
         lastRecordPath = dir + "/" + fn;
 
-        // 3) launch ffmpeg
-        QStringList args = {
-            "-rtsp_transport", "tcp",
-            "-i",              uri,
-            "-c",              "copy",
-            "-y",
-            lastRecordPath
-        };
-        qDebug() << "[Record] will run: ffmpeg" << args;
-
-        delete recordProcess;
-        recordProcess = new QProcess(this);
-        recordProcess->setProcessChannelMode(QProcess::MergedChannels);
-        connect(recordProcess, &QProcess::readyReadStandardError, [this]() {
-            auto err = recordProcess->readAllStandardError();
-            qDebug() << "[ffmpeg]" << err.trimmed();
-        });
-        recordProcess->start("ffmpeg", args);
-
-        // 4) wait up to 2 s for it to actually start
-        if (!recordProcess->waitForStarted(2000) ||
-            recordProcess->state() != QProcess::Running)
+        // 3) Build a GStreamer recording pipeline that opens its own RTSP
+        //    TCP session and remuxes the H.264 stream into MP4 (no re-encode).
+        //    fragment-duration enables fragmented MP4 so the file is playable
+        //    even if recording is interrupted unexpectedly.
         {
-            QMessageBox::warning(
-                this,
-                tr("Recording"),
-                tr("Could not start ffmpeg — check your URI and network.")
-                );
-            delete recordProcess;
-            recordProcess = nullptr;
+        QString pipelineDesc = QString(
+            "rtspsrc location=%1 protocols=tcp latency=200 ! "
+            "rtph264depay ! h264parse ! "
+            "mp4mux fragment-duration=1000 ! "
+            "filesink location=%2"
+        ).arg(uri, lastRecordPath);
+
+        qDebug() << "[Record] launching GStreamer pipeline:" << pipelineDesc;
+
+        GError *gstErr = nullptr;
+        recordPipeline = gst_parse_launch(pipelineDesc.toUtf8().constData(), &gstErr);
+        if (!recordPipeline || gstErr) {
+            QString errMsg = gstErr ? QString::fromUtf8(gstErr->message) : "Unknown error";
+            if (gstErr) g_error_free(gstErr);
+            QMessageBox::warning(this, tr("Recording"),
+                tr("Could not create recording pipeline:\n%1").arg(errMsg));
+            recordPipeline = nullptr;
+            return;
+        }
+        }
+
+        GstStateChangeReturn ret = gst_element_set_state(recordPipeline, GST_STATE_PLAYING);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            QMessageBox::warning(this, tr("Recording"),
+                tr("Could not start recording — check URI and network."));
+            gst_object_unref(recordPipeline);
+            recordPipeline = nullptr;
             return;
         }
 
@@ -2499,26 +2307,29 @@ void MainWindow::on_ScreenshotButton_clicked()
                      .toString("yyyyMMdd_hhmmss") + ".png";
     QString fullPath = dir + "/" + fn;
 
-    // 2) grab the X11 window that xvimagesink is drawing into
-    QScreen *screen = QGuiApplication::primaryScreen();
-    if (!screen) {
-        statusBar()->showMessage("📸 No screen available!", 3000);
+    // 2) grab the current frame from the GStreamer pipeline
+    //    (QScreen::grabWindow cannot capture xvimagesink's X11 overlay)
+    VideoReceiver *vr = videoWidget ? videoWidget->getReceiver() : nullptr;
+    if (!vr) {
+        statusBar()->showMessage("No video receiver available!", 3000);
         return;
     }
 
-    // videoWidget is your VideoRecorderWidget* embedded in the UI
-    WId videoXid = this->videoWidget->winId();
-    QPixmap pix = screen->grabWindow(videoXid);
+    QImage frame = vr->grabFrame();
+    if (frame.isNull()) {
+        statusBar()->showMessage("Screenshot failed — no frame available!", 3000);
+        return;
+    }
 
     // 3) save to disk
-    if (!pix.save(fullPath, "PNG")) {
-        statusBar()->showMessage("📸 Screenshot failed!", 3000);
+    if (!frame.save(fullPath, "PNG")) {
+        statusBar()->showMessage("Screenshot failed — could not save file!", 3000);
         return;
     }
 
     // 4) feedback
     statusBar()->showMessage(
-        QString("📸 Screenshot saved to:\n%1").arg(fullPath),
+        QString("Screenshot saved to:\n%1").arg(fullPath),
         5000
         );
 }
@@ -2784,9 +2595,16 @@ void MainWindow::createCameraControllerFromConfig()
                 } else if (videoSource == "siyi" && obj.contains("siyiConfig")) {
                     // Load SIYI configuration
                     QJsonObject siyiConfig = obj.value("siyiConfig").toObject();
-                    ip = siyiConfig.value("ip").toString(ip);
+                    bool compressorMode = siyiConfig.value("compressorMode").toBool(false);
+                    if (compressorMode) {
+                        // In compressor mode, controlIP is used for SDK
+                        ip = siyiConfig.value("controlIP").toString(ip);
+                    } else {
+                        ip = siyiConfig.value("ip").toString(ip);
+                    }
                     port = siyiConfig.value("port").toInt(port);
                     path = siyiConfig.value("path").toString(path);
+                    qDebug() << "[CONFIG] SIYI compressorMode:" << compressorMode << "SDK IP:" << ip;
                     
                 } else {
                     // Fallback to SIYI defaults if selected config not found
@@ -2819,14 +2637,7 @@ void MainWindow::createCameraControllerFromConfig()
         cameraController = std::make_unique<SiyiCameraController>(ip.toStdString(), 37260);
     }
 
-    if (!cameraController->start()) {
-        qWarning() << "Failed to start cameraController";
-        // keep it null to avoid using a half-started controller
-        cameraController.reset();
-        statusBar()->showMessage("Camera controller failed to start", 3000);
-    }
-
-    // wire callbacks into MainWindow slots
+    // Wire callbacks BEFORE start() so early events are not missed
     cameraController->onStarted = [this]() {
         QMetaObject::invokeMethod(this, "onCameraStarted", Qt::QueuedConnection);
     };
@@ -2834,12 +2645,12 @@ void MainWindow::createCameraControllerFromConfig()
         QMetaObject::invokeMethod(this, [this, msg]() { onCameraError(msg); }, Qt::QueuedConnection);
     };
 
-    // wire servoPositionChanged -> controller absolute position (if supported)
-    connect(this, &MainWindow::servoPositionChanged, this, [this](int newPos) {
-        if (cameraController && cameraController->supportsAbsolutePosition()) {
-            cameraController->setGimbalPosition(0, newPos);
-        }
-    }, Qt::QueuedConnection);
+    if (!cameraController->start()) {
+        qWarning() << "Failed to start cameraController";
+        // keep it null to avoid using a half-started controller
+        cameraController.reset();
+        statusBar()->showMessage("Camera controller failed to start", 3000);
+    }
 
 }
 
@@ -2858,13 +2669,12 @@ void MainWindow::initializeCameraController()
 }
 
 void MainWindow::initializePingWatcher() {
-    qDebug() << "[PING_WATCHER] Initializing continuous ping watcher";
-    
     // Check if ping watcher is already properly initialized
     if (pingWatcher && pingWatcher->isWatching()) {
-        qDebug() << "[PING_WATCHER] Already initialized and watching, skipping reinitialization";
         return;
     }
+
+    qDebug() << "[PING_WATCHER] Initializing continuous ping watcher";
     
     // Clean up existing ping watcher only if it exists
     if (pingWatcher) {
@@ -2917,27 +2727,38 @@ void MainWindow::initializePingWatcher() {
 }
 
 void MainWindow::onHostStatusChanged(const QString& name, bool reachable, int roundTripTime) {
-    qDebug() << "[PING_WATCHER]" << name << "camera status:" << (reachable ? "REACHABLE" : "UNREACHABLE") 
+    // This signal now only fires when status actually changes (reachable ↔ unreachable)
+    qDebug() << "[PING_WATCHER]" << name << (reachable ? "became REACHABLE" : "became UNREACHABLE")
              << "RTT:" << roundTripTime << "ms";
     
     // Update the connectivity display when status changes
     updateConnectivityDisplay();
     
-    // Also update config display if it's visible
-    if (showConfigOverlay) {
-        updateConfigDisplay();
+    // Update connectivity section in overlay
+    if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        refreshOverlayConnectivitySection();
+        renderOverlay();
     }
     
+    // Notify the VideoReceiver about reachability of the active camera.
+    // This suppresses useless pipeline restarts when the host is down,
+    // and triggers an immediate pipeline restart when it comes back.
+    QString currentVideoSource = getCurrentVideoSource().toUpper();
+    if (name.toUpper() == currentVideoSource && videoWidget) {
+        VideoReceiver* receiver = videoWidget->getReceiver();
+        if (receiver) {
+            receiver->setStreamReachable(reachable);
+        }
+    }
+
     if (!reachable) {
         QString errorMsg = QStringLiteral("%1 Camera unreachable (ping failed)").arg(name);
         onCameraError(errorMsg);
-    } else {
-        // Camera is reachable, you might want to update UI or clear previous error states
-        qDebug() << "[PING_WATCHER]" << name << "camera is reachable";
     }
 }
 
 void MainWindow::onHostError(const QString& name, const QString& error) {
+    if (error.isEmpty()) return;  // reachable transition, nothing to report
     qWarning() << "[PING_WATCHER]" << name << "ping error:" << error;
     QString errorMsg = QStringLiteral("%1 Camera ping error: %2").arg(name, error);
     onCameraError(errorMsg);
@@ -2947,35 +2768,33 @@ void MainWindow::onConnectivityScoreUpdated(const QString& name, const HostConne
     // Update the camera status display with comprehensive information
     QString statusText;
     QString statusStyle;
-    
+
     if (score.isReachable) {
-        // Camera is reachable - show detailed status
-        statusText = QString("%1: 🟢 UP | RTT: %2ms | Score: %3%")
+        // Camera is reachable - show clean status
+        statusText = QString("%1: 🟢 Connected | Ping: %2ms")
                     .arg(name)
-                    .arg(score.currentRtt)
-                    .arg(score.overallScore);
-        
-        // Color based on score
+                    .arg(score.currentRtt);
+
+        // Color based on score/performance (using theme colors)
         if (score.overallScore >= 80) {
-            statusStyle = "color: #00ff00; font-weight: bold;"; // Excellent - Bright green
+            statusStyle = "color: #9ece6a; font-weight: bold;"; // Success Green
         } else if (score.overallScore >= 60) {
-            statusStyle = "color: #88ff00; font-weight: bold;"; // Good - Light green
+            statusStyle = "color: #bb9af7; font-weight: bold;"; // Good Purple
         } else if (score.overallScore >= 40) {
-            statusStyle = "color: #ffaa00; font-weight: bold;"; // Fair - Orange
+            statusStyle = "color: #e0af68; font-weight: bold;"; // Warning Orange
         } else {
-            statusStyle = "color: #ff6600; font-weight: bold;"; // Poor - Dark orange
+            statusStyle = "color: #f7768e; font-weight: bold;"; // Error Red
         }
     } else {
-        // Camera is unreachable - still show status with score
-        statusText = QString("%1: 🔴 DOWN | Score: %2% | Failures: %3")
+        // Camera is unreachable
+        statusText = QString("%1: 🔴 Disconnected | Failures: %2")
                     .arg(name)
-                    .arg(score.overallScore)
                     .arg(score.consecutiveFailures);
-        
-        statusStyle = "color: #ff3333; font-weight: bold;"; // Red
+
+        statusStyle = "color: #f7768e; font-weight: bold;"; // Error Red
     }
-    
-    // Add additional details in tooltip
+
+    // Add additional details in tooltip (Keep detailed info here)
     QString tooltip = QString("Host: %1 (%2)\n"
                              "Status: %3\n"
                              "Overall Score: %4/100\n"
@@ -2996,55 +2815,65 @@ void MainWindow::onConnectivityScoreUpdated(const QString& name, const HostConne
                     .arg(score.isReachable ? score.consecutiveSuccesses : score.consecutiveFailures)
                     .arg(score.isReachable ? "successes" : "failures")
                     .arg(QDateTime::fromMSecsSinceEpoch(score.lastSeen).toString("hh:mm:ss"));
-    
+
     // Update the status display
     if (ui->lineEditCameraStatus) {
         ui->lineEditCameraStatus->setText(statusText);
         ui->lineEditCameraStatus->setStyleSheet(statusStyle);
         ui->lineEditCameraStatus->setToolTip(tooltip);
+        // Ensure cursor is at start to show the most relevant info if truncated
+        ui->lineEditCameraStatus->setCursorPosition(0);
     }
-    
+
     // Update status bar with summary
     QString currentVideoSource = getCurrentVideoSource();
     if ((name.toUpper() == "SIYI" && currentVideoSource == "siyi") ||
         (name.toUpper() == "AI" && currentVideoSource == "ai") ||
         (name.toUpper() == "SERVO" && currentVideoSource == "servo")) {
-        
-        QString statusBarMsg = QString("%1 Camera - %2 | Reliability: %3% | Performance: %4%")
+
+        QString statusBarMsg = QString("%1 Camera - %2 | Reliability: %3%")
                               .arg(name)
                               .arg(score.isReachable ? "Connected" : "Disconnected")
-                              .arg(score.reliabilityScore)
-                              .arg(score.performanceScore);
-        
+                              .arg(score.reliabilityScore);
+
         statusBar()->showMessage(statusBarMsg, 5000);
     }
-    
+
     LOG_UI_STATUS() << "Updated" << name << "connectivity display:"
-             << "Score:" << score.overallScore 
+             << "Score:" << score.overallScore
              << "Reachable:" << score.isReachable
              << "RTT:" << score.currentRtt;
-    
+
     // Check for low connectivity and handle video shutdown
     checkAndHandleLowConnectivity(name, score);
-    
-    // Also update config display if it's visible
-    if (showConfigOverlay) {
-        updateConfigDisplay();
+
+    // Update connectivity section in overlay
+    if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        refreshOverlayConnectivitySection();
+        renderOverlay();
     }
 }
 
 void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostConnectivityScore& score) {
+    // Only apply shutdown logic to the currently selected video source
+    QString currentVideoSource = getCurrentVideoSource().toUpper();
+    if (name.toUpper() != currentVideoSource) {
+        return;
+    }
+
     bool currentlyShutdown = videoShutdownStates.value(name, false);
-    bool shouldShutdown = score.overallScore < LOW_CONNECTIVITY_THRESHOLD;
-    
+
+    // Minimum consecutive failures required before shutting down video
+    static const int MIN_CONSECUTIVE_FAILURES_FOR_SHUTDOWN = 9999;
+
+    bool shouldShutdown = !score.isReachable &&
+                          score.consecutiveFailures >= MIN_CONSECUTIVE_FAILURES_FOR_SHUTDOWN;
+
     if (shouldShutdown && !currentlyShutdown) {
-        // Score dropped below threshold - shut down video
-        LOG_VIDEO_SHUTDOWN() << "Camera" << name << "score" << score.overallScore 
-                 << "<" << LOW_CONNECTIVITY_THRESHOLD << "% - shutting down video display";
-        
+        LOG_VIDEO_SHUTDOWN() << "Camera" << name << "connection lost - shutting down video";
+
         videoShutdownStates[name] = true;
-        
-        // Stop video display for this camera
+
         if (videoWidget) {
             VideoReceiver* receiver = videoWidget->getReceiver();
             if (receiver) {
@@ -3052,22 +2881,15 @@ void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostCo
             }
             videoWidget->hide();
         }
-        
-        // Show user notification
-        statusBar()->showMessage(QString("Camera %1 video disabled due to poor connectivity (Score: %2%%)")
-                                .arg(name).arg(score.overallScore), 5000);
-        
-        // Update UI to show shutdown state
+
+        statusBar()->showMessage(QString("Camera %1 video disabled - connection lost").arg(name), 5000);
         updateConnectivityDisplay();
-        
-    } else if (!shouldShutdown && currentlyShutdown) {
-        // Score recovered above threshold - restore video
-        LOG_VIDEO_RESTORE() << "Camera" << name << "score" << score.overallScore 
-                 << ">=" << LOW_CONNECTIVITY_THRESHOLD << "% - restoring video display";
-        
+
+    } else if (score.isReachable && currentlyShutdown) {
+        LOG_VIDEO_RESTORE() << "Camera" << name << "connection restored - restoring video";
+
         videoShutdownStates[name] = false;
-        
-        // Restart video display
+
         if (videoWidget && !rtspUri.isEmpty()) {
             VideoReceiver* receiver = videoWidget->getReceiver();
             if (receiver) {
@@ -3076,138 +2898,625 @@ void MainWindow::checkAndHandleLowConnectivity(const QString& name, const HostCo
             }
             videoWidget->show();
         }
-        
-        // Show user notification
-        statusBar()->showMessage(QString("Camera %1 video restored (Score: %2%%)")
-                                .arg(name).arg(score.overallScore), 3000);
-        
-        // Update UI to show restored state
+
+        statusBar()->showMessage(QString("Camera %1 video restored").arg(name), 3000);
         updateConnectivityDisplay();
     }
 }
 
 void MainWindow::updateConnectivityDisplay() {
     LOG_UI_STATUS() << "Starting connectivity display update";
-    
+
     if (!pingWatcher) {
-        LOG_UI_STATUS() << "Ping watcher not initialized, showing default status";
         if (ui->lineEditCameraStatus) {
             ui->lineEditCameraStatus->setText("Initializing connectivity monitor...");
-            ui->lineEditCameraStatus->setStyleSheet("color: #ffaa00; font-weight: bold;");
+            ui->lineEditCameraStatus->setStyleSheet("color: #e0af68; font-weight: bold;"); // Warning Orange
             ui->lineEditCameraStatus->setToolTip("Connectivity monitoring is starting up");
         }
         return;
     }
-    
+
     // Get all configured camera IPs
     QMap<QString, QString> cameraIps = loadAllCameraIps();
-    
-    LOG_UI_STATUS() << "Found" << cameraIps.size() << "camera configurations";
-    
+
     if (cameraIps.isEmpty()) {
-        LOG_UI_STATUS() << "No cameras configured, showing empty status";
         if (ui->lineEditCameraStatus) {
             ui->lineEditCameraStatus->setText("No cameras configured");
-            ui->lineEditCameraStatus->setStyleSheet("color: #ffaa00; font-weight: bold;");
+            ui->lineEditCameraStatus->setStyleSheet("color: #e0af68; font-weight: bold;"); // Warning
             ui->lineEditCameraStatus->setToolTip("No camera configurations found in settings");
         }
         return;
     }
-    
+
     // Show summary of all camera statuses
     QStringList statusList;
     int reachableCount = 0;
     int totalCount = cameraIps.size();
-    
+
     for (auto it = cameraIps.begin(); it != cameraIps.end(); ++it) {
         QString cameraType = it.key();
         QString cameraIp = it.value();
-        
-        LOG_UI_STATUS() << "Checking status for" << cameraType << "at" << cameraIp;
-        
+
         HostConnectivityScore score = pingWatcher->getConnectivityScore(cameraType);
-        
-        LOG_UI_STATUS() << cameraType << "score:" << score.overallScore 
-                 << "reachable:" << score.isReachable 
-                 << "totalPings:" << score.totalPings;
-        
+
         if (score.isReachable) {
             reachableCount++;
             statusList << QString("%1:🟢%2ms").arg(cameraType.left(3)).arg(score.currentRtt);
         } else {
-            statusList << QString("%1:🔴%2").arg(cameraType.left(3)).arg(score.consecutiveFailures);
+            statusList << QString("%1:🔴").arg(cameraType.left(3));
         }
     }
-    
+
     // Create summary display
-    QString summaryText = QString("Cameras: %1/%2 UP | %3")
+    QString summaryText = QString("Cameras: %1/%2 Online | %3")
                          .arg(reachableCount)
                          .arg(totalCount)
                          .arg(statusList.join(" | "));
-    
+
     QString summaryStyle;
     if (reachableCount == totalCount) {
-        summaryStyle = "color: #00ff00; font-weight: bold;"; // All good
+        summaryStyle = "color: #9ece6a; font-weight: bold;"; // Success Green
     } else if (reachableCount > 0) {
-        summaryStyle = "color: #ffaa00; font-weight: bold;"; // Some down
+        summaryStyle = "color: #e0af68; font-weight: bold;"; // Warning Orange
     } else {
-        summaryStyle = "color: #ff3333; font-weight: bold;"; // All down
+        summaryStyle = "color: #f7768e; font-weight: bold;"; // Error Red
     }
-    
-    // Create detailed tooltip
-    QString tooltip = QString("Camera Status Summary\n"
-                             "Total Cameras: %1\n"
-                             "Reachable: %2\n"
-                             "Unreachable: %3\n\n")
-                    .arg(totalCount)
-                    .arg(reachableCount)
-                    .arg(totalCount - reachableCount);
-    
-    for (auto it = cameraIps.begin(); it != cameraIps.end(); ++it) {
-        QString cameraType = it.key();
-        QString cameraIp = it.value();
-        HostConnectivityScore score = pingWatcher->getConnectivityScore(cameraType);
-        
-        QString statusDetail;
-        if (score.totalPings == 0) {
-            statusDetail = "🔄 Initializing...";
-        } else if (score.isReachable) {
-            statusDetail = QString("🟢 Reachable (RTT: %1ms)").arg(score.currentRtt);
-        } else {
-            statusDetail = QString("🔴 Unreachable (%1 failures)").arg(score.consecutiveFailures);
-        }
-        
-        tooltip += QString("\n%1 (%2):\n"
-                          "  Status: %3\n"
-                          "  Score: %4%\n"
-                          "  Success Rate: %5%\n"
-                          "  Avg RTT: %6ms\n"
-                          "  Total Pings: %7")
-                   .arg(cameraType)
-                   .arg(cameraIp)
-                   .arg(statusDetail)
-                   .arg(score.overallScore)
-                   .arg(score.reliabilityScore)
-                   .arg(score.averageRtt)
-                   .arg(score.totalPings);
-    }
-    
+
     // Update the display
     if (ui->lineEditCameraStatus) {
         ui->lineEditCameraStatus->setText(summaryText);
         ui->lineEditCameraStatus->setStyleSheet(summaryStyle);
-        ui->lineEditCameraStatus->setToolTip(tooltip);
+        ui->lineEditCameraStatus->setCursorPosition(0);
         LOG_UI_STATUS() << "Display updated with text:" << summaryText;
-    } else {
-        LOG_UI_STATUS() << "ERROR: lineEditCameraStatus is null!";
     }
-    
-    LOG_UI_STATUS() << "Connectivity summary updated:"
-             << "Reachable:" << reachableCount << "/" << totalCount
-             << "Display:" << summaryText;
-    
-    // Also update config display if it's visible
-    if (showConfigOverlay) {
-        updateConfigDisplay();
+
+    // Update connectivity section in overlay
+    if (currentOverlayMode_ == OverlayMode::RealTimeStats) {
+        refreshOverlayConnectivitySection();
+        renderOverlay();
     }
 }
+
+// Mode file watchdog implementation
+void MainWindow::initializeModeFileWatcher(const QString& filePath) {
+    if (filePath.isEmpty()) {
+        qDebug() << "[MODE_WATCHER] No mode file path provided";
+        return;
+    }
+    
+    modeFilePath = filePath;
+    
+    // Create file system watcher
+    if (!modeFileWatcher) {
+        modeFileWatcher = new QFileSystemWatcher(this);
+        connect(modeFileWatcher, &QFileSystemWatcher::fileChanged,
+                this, &MainWindow::onModeFileChanged);
+    }
+    
+    // Add file to watch list
+    if (QFile::exists(filePath)) {
+        modeFileWatcher->addPath(filePath);
+        qDebug() << "[MODE_WATCHER] Watching mode file:" << filePath;
+        
+        // Read initial mode
+        onModeFileChanged(filePath);
+    } else {
+        qDebug() << "[MODE_WATCHER] Mode file does not exist yet:" << filePath;
+        // Watch the directory instead to detect when file is created
+        QFileInfo fileInfo(filePath);
+        QString dir = fileInfo.absolutePath();
+        if (QDir(dir).exists()) {
+            modeFileWatcher->addPath(dir);
+        }
+    }
+    
+    // Create toast label
+    if (!modeToastLabel) {
+        modeToastLabel = new QLabel(this);
+        modeToastLabel->setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
+        modeToastLabel->setAttribute(Qt::WA_TranslucentBackground);
+        modeToastLabel->setStyleSheet(R"(
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(45, 52, 68, 240),
+                    stop:1 rgba(30, 35, 48, 240));
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 16px 24px;
+                border-radius: 12px;
+                border: 2px solid rgba(100, 180, 255, 0.6);
+            }
+        )");
+        modeToastLabel->setAlignment(Qt::AlignCenter);
+        modeToastLabel->setMinimumWidth(350);
+        modeToastLabel->hide();
+    }
+    
+    // Create toast timer
+    if (!toastTimer) {
+        toastTimer = new QTimer(this);
+        toastTimer->setSingleShot(true);
+        connect(toastTimer, &QTimer::timeout, this, &MainWindow::hideToast);
+    }
+    
+    // Create fade animation for toast
+    if (!toastFadeAnimation) {
+        toastFadeAnimation = new QPropertyAnimation(modeToastLabel, "windowOpacity", this);
+        toastFadeAnimation->setDuration(300);
+    }
+}
+
+void MainWindow::onModeFileChanged(const QString& path) {
+    // Re-add the file to watch list (some systems remove it after change)
+    if (modeFileWatcher && !modeFileWatcher->files().contains(path)) {
+        if (QFile::exists(path)) {
+            modeFileWatcher->addPath(path);
+        }
+    }
+    
+    // If it was a directory change, check if our file now exists
+    if (QFileInfo(path).isDir()) {
+        if (QFile::exists(modeFilePath)) {
+            modeFileWatcher->addPath(modeFilePath);
+            onModeFileChanged(modeFilePath);
+        }
+        return;
+    }
+    
+    // Read and parse the JSON file
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qDebug() << "[MODE_WATCHER] Could not open mode file:" << path;
+        return;
+    }
+    
+    QByteArray data = file.readAll();
+    file.close();
+    
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (doc.isNull() || !doc.isObject()) {
+        qDebug() << "[MODE_WATCHER] Invalid JSON in mode file";
+        return;
+    }
+    
+    QJsonObject obj = doc.object();
+    int mode = obj.value("mode").toInt(0);
+    QString description = obj.value("description").toString();
+    
+    qDebug() << "[MODE_WATCHER] Mode changed - Mode:" << mode << "Description:" << description;
+    
+    // Show toast notification
+    showModeToast(mode, description);
+}
+
+void MainWindow::showModeToast(int mode, const QString& description) {
+    if (!modeToastLabel) {
+        return;
+    }
+    
+    // Style based on mode
+    QString modeIcon;
+    QString modeColor;
+    QString modeName;
+    
+    if (mode == 1) {
+        modeIcon = " ";
+        modeColor = "#4CAF50";  // Green for drone mode
+        modeName = "DRONE MODE";
+    } else if (mode == 2) {
+        modeIcon = " ";
+        modeColor = "#2196F3";  // Blue for camera mode
+        modeName = "CAMERA MODE";
+    } else {
+        modeIcon = " ";
+        modeColor = "#FF9800";  // Orange for unknown
+        modeName = QString("MODE %1").arg(mode);
+    }
+    
+    // Update toast style with mode-specific color
+    modeToastLabel->setStyleSheet(QString(R"(
+        QLabel {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(45, 52, 68, 245),
+                stop:1 rgba(30, 35, 48, 245));
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 16px 24px;
+            border-radius: 12px;
+            border: 3px solid %1;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+    )").arg(modeColor));
+    
+    // Set toast content
+    QString toastHtml = QString(
+        "<div style='text-align: center;'>"
+        "<span style='font-size: 28px;'>%1</span><br>"
+        "<span style='color: %2; font-size: 18px;'>%3</span><br>"
+        "<span style='color: #aaaaaa; font-size: 12px;'>%4</span>"
+        "</div>"
+    ).arg(modeIcon).arg(modeColor).arg(modeName).arg(description);
+    
+    modeToastLabel->setText(toastHtml);
+    modeToastLabel->adjustSize();
+    
+    // Position toast at top center of the main window
+    QPoint windowCenter = this->geometry().center();
+    int toastX = windowCenter.x() - modeToastLabel->width() / 2;
+    int toastY = this->geometry().top() + 60;
+    modeToastLabel->move(toastX, toastY);
+    
+    // Show toast with fade-in effect
+    modeToastLabel->setWindowOpacity(0);
+    modeToastLabel->show();
+    modeToastLabel->raise();
+    
+    toastFadeAnimation->stop();
+    toastFadeAnimation->setStartValue(0.0);
+    toastFadeAnimation->setEndValue(1.0);
+    toastFadeAnimation->start();
+    
+    // Start timer to hide after 3 seconds
+    toastTimer->start(3000);
+    
+    // Also show in status bar
+    statusBar()->showMessage(QString("Mode switched to: %1").arg(modeName), 3000);
+}
+
+void MainWindow::hideToast() {
+    if (!modeToastLabel || !toastFadeAnimation) {
+        return;
+    }
+    
+    // Fade out animation
+    toastFadeAnimation->stop();
+    toastFadeAnimation->setStartValue(1.0);
+    toastFadeAnimation->setEndValue(0.0);
+    toastFadeAnimation->start();
+    
+    // Hide after animation completes
+    connect(toastFadeAnimation, &QPropertyAnimation::finished, this, [this]() {
+        if (modeToastLabel && toastFadeAnimation->direction() == QPropertyAnimation::Forward) {
+            // Only hide if we were fading out (endValue was 0)
+            if (toastFadeAnimation->endValue().toDouble() < 0.5) {
+                modeToastLabel->hide();
+            }
+        }
+    });
+}
+
+// ── ROI Zoom ─────────────────────────────────────────────────────────────────
+// Uses QRubberBand (lightweight, no background paint) + eventFilter for mouse.
+// QRubberBand draws only a border rectangle and never covers the video surface.
+
+void MainWindow::setupRoiOverlay()
+{
+    m_roiCalc.setBaseFov(62.0f, 37.0f);
+    m_roiCalc.setZoomRange(MIN_ZOOM, MAX_ZOOM);
+    m_roiActive = false;
+    m_roiDragging = false;
+}
+
+void MainWindow::onRoiToggled(bool active)
+{
+    m_roiActive = active;
+    m_roiDragging = false;
+
+    if (!videoWidget) return;
+
+    // Lazy-create the 4 border edges and install event filter once
+    if (!m_roiEdge[0]) {
+        const QString edgeStyle = "background-color: rgba(70, 130, 230, 220);";
+        for (int i = 0; i < 4; ++i) {
+            m_roiEdge[i] = new QFrame(videoWidget);
+            m_roiEdge[i]->setStyleSheet(edgeStyle);
+            m_roiEdge[i]->setFrameShape(QFrame::NoFrame);
+            m_roiEdge[i]->hide();
+        }
+        videoWidget->installEventFilter(this);
+        videoWidget->setMouseTracking(true);
+    }
+
+    if (active) {
+        videoWidget->setCursor(Qt::CrossCursor);
+        statusBar()->showMessage("ROI Zoom: drag a rectangle on the video. Right-click to reset.", 5000);
+    } else {
+        hideRoiRect();
+        videoWidget->setCursor(Qt::ArrowCursor);
+        statusBar()->showMessage("ROI Zoom deactivated", 2000);
+    }
+
+    if (m_roiToggleBtn) {
+        m_roiToggleBtn->setChecked(active);
+    }
+}
+
+void MainWindow::showRoiRect(const QRect &r)
+{
+    if (!m_roiEdge[0]) return;
+    const int t = 2; // border thickness
+    // top edge
+    m_roiEdge[0]->setGeometry(r.x(), r.y(), r.width(), t);
+    // bottom edge
+    m_roiEdge[1]->setGeometry(r.x(), r.bottom() - t + 1, r.width(), t);
+    // left edge
+    m_roiEdge[2]->setGeometry(r.x(), r.y(), t, r.height());
+    // right edge
+    m_roiEdge[3]->setGeometry(r.right() - t + 1, r.y(), t, r.height());
+    for (int i = 0; i < 4; ++i) {
+        m_roiEdge[i]->show();
+        m_roiEdge[i]->raise();
+    }
+}
+
+void MainWindow::hideRoiRect()
+{
+    for (int i = 0; i < 4; ++i)
+        if (m_roiEdge[i]) m_roiEdge[i]->hide();
+}
+
+void MainWindow::onRoiSelected(const QRectF &normalizedRect)
+{
+    if (!cameraController || !cameraController->supportsRoiZoom()) {
+        statusBar()->showMessage("ROI zoom not supported for this camera", 3000);
+        return;
+    }
+
+    (void)QtConcurrent::run([this, normalizedRect]() {
+        auto [yaw, pitch, roll] = cameraController->getGimbalAttitude();
+        Q_UNUSED(roll);
+
+        RoiZoomCommand cmd = m_roiCalc.compute(yaw, pitch, currentZoom, normalizedRect);
+
+        qDebug() << "[ROI] Current: yaw=" << yaw << " pitch=" << pitch << " zoom=" << currentZoom;
+        qDebug() << "[ROI] Target:  yaw=" << cmd.targetYaw << " pitch=" << cmd.targetPitch
+                 << " zoom=" << cmd.targetZoom;
+
+        cameraController->setGimbalAngles(cmd.targetYaw, cmd.targetPitch);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        cameraController->setAbsoluteZoom(cmd.targetZoom, 1);
+
+        float finalYaw   = cmd.targetYaw;
+        float finalPitch = cmd.targetPitch;
+        float finalZoom  = cmd.targetZoom;
+        QMetaObject::invokeMethod(this, [this, finalYaw, finalPitch, finalZoom]() {
+            currentZoom = finalZoom;
+            statusBar()->showMessage(
+                QString("ROI zoom: yaw=%1° pitch=%2° zoom=%3×")
+                    .arg(finalYaw, 0, 'f', 1)
+                    .arg(finalPitch, 0, 'f', 1)
+                    .arg(finalZoom, 0, 'f', 1),
+                4000);
+        }, Qt::QueuedConnection);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        cameraController->requestAutofocus();
+    });
+}
+
+void MainWindow::onRoiReset()
+{
+    hideRoiRect();
+
+    if (!cameraController) return;
+
+    (void)QtConcurrent::run([this]() {
+        cameraController->requestGimbalCenter();
+        cameraController->setAbsoluteZoom(MIN_ZOOM, 1);
+
+        QMetaObject::invokeMethod(this, [this]() {
+            currentZoom = MIN_ZOOM;
+            statusBar()->showMessage("ROI reset: 1× zoom, gimbal centered", 3000);
+        }, Qt::QueuedConnection);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        cameraController->requestAutofocus();
+    });
+}
+
+void MainWindow::switchToVideoStream() {
+    if (mainStackedWidget && btnVideoStream && btnRecords) {
+        mainStackedWidget->setCurrentIndex(0);
+        btnVideoStream->setStyleSheet("background-color: #3d59a1; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
+        btnRecords->setStyleSheet("background-color: #24283b; color: #a9b1d6; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
+    }
+    if (recordsRefreshTimer) {
+        recordsRefreshTimer->stop();
+    }
+}
+
+void MainWindow::switchToRecords() {
+    if (mainStackedWidget && btnVideoStream && btnRecords) {
+        mainStackedWidget->setCurrentIndex(1);
+        btnRecords->setStyleSheet("background-color: #3d59a1; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
+        btnVideoStream->setStyleSheet("background-color: #24283b; color: #a9b1d6; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
+    }
+    refreshRecordsList();
+    if (recordsRefreshTimer) {
+        recordsRefreshTimer->start(1000);
+    }
+}
+
+void MainWindow::refreshRecordsList() {
+    if (!recordsListWidget) return;
+
+    QString screensDir = QDir::homePath() + "/Hexa5CameraScreenshots";
+    QString videosDir = QDir::homePath() + "/Hexa5CameraRecordedVideos";
+
+    QDir sDir(screensDir);
+    QDir vDir(videosDir);
+
+    QStringList filters;
+    filters << "*.png" << "*.jpg" << "*.jpeg" << "*.mp4" << "*.avi" << "*.mkv";
+
+    QFileInfoList fileList;
+    if (sDir.exists()) fileList += sDir.entryInfoList(filters, QDir::Files, QDir::Time);
+    if (vDir.exists()) fileList += vDir.entryInfoList(filters, QDir::Files, QDir::Time);
+
+    std::sort(fileList.begin(), fileList.end(), [](const QFileInfo &a, const QFileInfo &b) {
+        return a.lastModified() > b.lastModified();
+    });
+
+    // Only rebuild if there's a file list change
+    bool dirty = false;
+    if (fileList.size() != recordsListWidget->count()) {
+        dirty = true;
+    } else {
+        for (int i = 0; i < fileList.size(); ++i) {
+            if (recordsListWidget->item(i)->data(Qt::UserRole).toString() != fileList[i].absoluteFilePath()) {
+                dirty = true;
+                break;
+            }
+        }
+    }
+
+    if (!dirty) return;
+
+    recordsListWidget->clear();
+    for (const QFileInfo& fi : fileList) {
+        QListWidgetItem *item = new QListWidgetItem(recordsListWidget);
+        item->setText(fi.fileName());
+        QString ext = fi.suffix().toLower();
+        if (ext == "mp4" || ext == "avi" || ext == "mkv") {
+            QPixmap pix(160, 120);
+            pix.fill(QColor(30, 30, 30));
+            QPainter p(&pix);
+            p.setPen(Qt::white);
+            QFont font = p.font();
+            font.setBold(true);
+            font.setPointSize(12);
+            p.setFont(font);
+            p.drawText(pix.rect(), Qt::AlignCenter, "VIDEO\n" + ext.toUpper());
+            item->setIcon(QIcon(pix));
+        } else {
+            QPixmap pix(fi.absoluteFilePath());
+            item->setIcon(QIcon(pix.scaled(160, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        }
+        item->setData(Qt::UserRole, fi.absoluteFilePath());
+        recordsListWidget->addItem(item);
+    }
+}
+
+void MainWindow::onRecordItemClicked(QListWidgetItem *item) {
+    if (!item) return;
+    QString filePath = item->data(Qt::UserRole).toString();
+    QFileInfo fi(filePath);
+    if (!fi.exists()) return;
+    QString ext = fi.suffix().toLower();
+
+    QDialog *dialog = new QDialog(this);
+    dialog->setWindowTitle(fi.fileName());
+    dialog->setWindowFlags(dialog->windowFlags() | Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint);
+    
+    QVBoxLayout *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(5);
+
+    if (ext == "png" || ext == "jpg" || ext == "jpeg") {
+        QLabel *label = new QLabel(dialog);
+        QPixmap pix(filePath);
+        label->setPixmap(pix.scaled(1024, 768, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        label->setAlignment(Qt::AlignCenter);
+        layout->addWidget(label);
+        dialog->resize(1024, 768);
+        
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    } else if (ext == "mp4" || ext == "avi" || ext == "mkv") {
+        layout->setContentsMargins(5, 5, 5, 5);
+        layout->setSpacing(5);
+
+        QVideoWidget *videoWidget = new QVideoWidget(dialog);
+        layout->addWidget(videoWidget, 1);
+        
+        QMediaPlayer *player = new QMediaPlayer(dialog);
+        QAudioOutput *audioOutput = new QAudioOutput(dialog);
+        player->setAudioOutput(audioOutput);
+        player->setVideoOutput(videoWidget);
+        player->setSource(QUrl::fromLocalFile(filePath));
+
+        QHBoxLayout *controlLayout = new QHBoxLayout();
+        controlLayout->setContentsMargins(0, 0, 0, 0);
+        
+        QSlider *positionSlider = new QSlider(Qt::Horizontal, dialog);
+        positionSlider->setRange(0, 0);
+
+        QPushButton *playPauseBtn = new QPushButton(dialog);
+        playPauseBtn->setIcon(dialog->style()->standardIcon(QStyle::SP_MediaPause));
+        
+        QPushButton *skipBtn = new QPushButton(dialog);
+        skipBtn->setIcon(dialog->style()->standardIcon(QStyle::SP_MediaSeekForward));
+
+        controlLayout->addWidget(playPauseBtn);
+        controlLayout->addWidget(skipBtn);
+        controlLayout->addWidget(positionSlider);
+
+        layout->addLayout(controlLayout);
+        
+        auto togglePlayPause = [player]() {
+            if (player->playbackState() == QMediaPlayer::PlayingState) {
+                player->pause();
+            } else {
+                player->play();
+            }
+        };
+
+        connect(playPauseBtn, &QPushButton::clicked, togglePlayPause);
+
+        connect(player, &QMediaPlayer::playbackStateChanged, [dialog, playPauseBtn](QMediaPlayer::PlaybackState state) {
+            if (state == QMediaPlayer::PlayingState) {
+                playPauseBtn->setIcon(dialog->style()->standardIcon(QStyle::SP_MediaPause));
+            } else {
+                playPauseBtn->setIcon(dialog->style()->standardIcon(QStyle::SP_MediaPlay));
+            }
+        });
+
+        std::shared_ptr<bool> wasPlaying = std::make_shared<bool>(false);
+
+        connect(positionSlider, &QSlider::sliderPressed, [player, wasPlaying]() {
+            *wasPlaying = (player->playbackState() == QMediaPlayer::PlayingState);
+            player->pause();
+        });
+
+        connect(positionSlider, &QSlider::sliderMoved, [player](int position) {
+            player->setPosition(position);
+        });
+
+        connect(positionSlider, &QSlider::sliderReleased, [player, wasPlaying]() {
+            if (*wasPlaying) {
+                player->play();
+            }
+        });
+
+        connect(player, &QMediaPlayer::positionChanged, [positionSlider](qint64 position) {
+            if (!positionSlider->isSliderDown()) {
+                positionSlider->setValue(position);
+            }
+        });
+
+        connect(player, &QMediaPlayer::durationChanged, [positionSlider](qint64 duration) {
+            positionSlider->setMaximum(duration);
+        });
+
+        connect(skipBtn, &QPushButton::clicked, [player]() {
+            player->setPosition(player->position() + 10000); // 10s skip
+        });
+
+        // Ensure player is stopped/deleted on close
+        connect(dialog, &QDialog::finished, [player]() {
+            player->stop();
+        });
+
+        dialog->resize(1024, 768);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+        player->play();
+    } else {
+        delete dialog;
+        return;
+    }
+}
+
+

@@ -22,6 +22,10 @@ public:
     // control API
     bool setGimbalSpeed(int yawSpeed, int pitchSpeed) override;
     bool setGimbalPosition(int yawPos, int pitchPos) override;
+    bool setGimbalAngles(float yaw, float pitch) override;
+    std::tuple<float,float,float> getGimbalAttitude() const override;
+    bool supportsRoiZoom() const override { return true; }
+    bool requestGimbalCenter() override;
     bool setAbsoluteZoom(float zoomLevel, int speed = 1) override;
     bool requestAutofocus() override;
 

@@ -7,6 +7,7 @@
 #include "signalhandler.h"
 #include "mainwindow.h"
 #include <QFileInfo>
+#include <QCommandLineParser>
 
 
 int main(int argc, char *argv[])
@@ -20,6 +21,36 @@ int main(int argc, char *argv[])
     qputenv("QT_XCB_FORCE_SOFTWARE_OPENGL", "1");
     qputenv("QMLSCENE_DEVICE", "softwarecontext");
     QApplication app(argc, argv);
+    
+    // Set application info
+    app.setApplicationName("HexaCam");
+    app.setApplicationVersion("1.0");
+
+    // Parse command line arguments
+    QCommandLineParser parser;
+    parser.setApplicationDescription("Hexa5 Camera Control Application");
+    parser.addHelpOption();
+    parser.addVersionOption();
+    
+    // Mode file option
+    QCommandLineOption modeFileOption(
+        QStringList() << "m" << "mode-file",
+        "Path to the mode JSON file to watch for mode changes",
+        "file"
+    );
+    parser.addOption(modeFileOption);
+    
+    parser.process(app);
+    
+    QString modeFilePath = parser.value(modeFileOption);
+    
+    // If no command line arg, use default path
+    if (modeFilePath.isEmpty()) {
+        modeFilePath = "/tmp/hexa-mode.json";
+        qDebug() << "[MODE_WATCHER] Using default mode file path:" << modeFilePath;
+    } else {
+        qDebug() << "[MODE_WATCHER] Using mode file path from argument:" << modeFilePath;
+    }
 
     // **1)** Keep the event loop alive even if splash is closed
     app.setQuitOnLastWindowClosed(false);
@@ -60,6 +91,10 @@ int main(int argc, char *argv[])
                      | Qt::WindowCloseButtonHint
                      | Qt::WindowSystemMenuHint
                      );
+    
+    // Initialize mode file watcher
+    w.initializeModeFileWatcher(modeFilePath);
+    
     //w.show();
     w.showMaximized();
     w.setStyleSheet(css);

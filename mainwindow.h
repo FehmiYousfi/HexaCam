@@ -8,6 +8,7 @@
 #include <QtCore/QTime>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QListWidgetItem>
+#include <QtWidgets/QStackedWidget>
 #include <memory>
 #include <thread>
 #include "thirdparty/SIYI-SDK/src/sdk.h"
@@ -22,11 +23,14 @@
 #include "ping.h"
 #include <QtWidgets/QToolButton>
 #include <QtCore/QPropertyAnimation>
+#include <QtCore/QFileSystemWatcher>
 #include "servo_client.hpp"
 #include "ServoWorker.h"
 #include "CameraController.h"
-
-
+#include "VideoReceiver/VideoReceiver.h"
+#include "RoiZoomCalculator.h"
+#include <QtWidgets/QPushButton>
+#include <QtWidgets/QFrame>
 
 using ServoControl::ServoClient;
 namespace Ui {
@@ -42,6 +46,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
     void playIntro(const QString& splashUrl, const QString& css);
+    void initializeModeFileWatcher(const QString& filePath);
 
 
 protected:
@@ -105,8 +110,18 @@ private slots:
     void initializeCameraController();
     bool validateConfiguration(const QString& cameraType);
     void updateConfigDisplay();
-    void onShowConfigToggled(bool enabled);
+    void onOverlayModeChanged(int index);
     void setVideoCharacteristics(const QString& characteristics);
+    void onBandwidthUpdated(const BandwidthStats& stats);
+    void onStreamHealthUpdated(const StreamHealthInfo& info);
+    void onModeFileChanged(const QString& path);
+    void hideToast();
+    void onRoiSelected(const QRectF &normalizedRect);
+    void onRoiReset();
+    void switchToVideoStream();
+    void switchToRecords();
+    void refreshRecordsList();
+    void onRecordItemClicked(QListWidgetItem *item);
 
 
 signals:
@@ -159,7 +174,8 @@ private:
     int ZOOM_LEVELS = int((MAX_ZOOM - MIN_ZOOM) / ZOOM_STEP_CONSTANT + 0.5f);
     int lastZoomSign = 0;
     int lastZoomIndex = -1;
-    int lastZoomLevel = -1;
+    int lastZoomLevel = 0;
+    QElapsedTimer zoomRepeatTimer;
     GstElement *recordPipeline = nullptr;
     QString     rtspUri;
 
@@ -171,7 +187,6 @@ private:
     bool              isRecording   = false;
     QString           currentRecordPath;
 
-
     enum class RecordState { Idle, Recording };
     RecordState recordState{RecordState::Idle};
     QProcess*   recordProcess = nullptr;
@@ -180,6 +195,15 @@ private:
     QLabel*     recordOverlay = nullptr;
     QString     lastRecordPath;
     bool useLocalCamera = false;
+
+    // UI setup methods (implemented in mainwindow_ui_setup.cpp)
+    void setupStyles();
+    void setupLayout();
+    void setupConnections();
+    void setupVideoWidget();
+    void setupRecordingOverlay();
+    void setupConfigOverlayLabel();
+
     QString loadControlIp() const;
     QMap<QString, QString> loadAllCameraIps() const; // Extract all IPs from config
     QString getCurrentVideoSource() const; // Get current video source from config
@@ -194,7 +218,7 @@ private:
     ContinuousPingWatcher* pingWatcher = nullptr;
     QMap<QString, HostConnectivityScore> connectivityScores;
     QMap<QString, bool> videoShutdownStates; // Track which cameras have video shut down
-    static const int LOW_CONNECTIVITY_THRESHOLD = 30; // Score below 30% triggers shutdown
+    static const int LOW_CONNECTIVITY_THRESHOLD = 30; // Deprecated: No longer used for video shutdown. Video now only stops when connection is lost (isReachable=false)
 
 
     QVideoWidget  *splashVideo   = nullptr;
@@ -208,17 +232,75 @@ private:
     bool configValid = false;
     QString configErrors;
     QLabel* configDisplayLabel = nullptr;
-    bool showConfigOverlay = false;
-    
+
+    // Overlay mode: 0=Off, 1=StreamConfig, 2=RealTimeStats
+    enum class OverlayMode : int { Off = 0, StreamConfig = 1, RealTimeStats = 2 };
+    OverlayMode currentOverlayMode_ = OverlayMode::Off;
+    QTimer* realtimeStatsTimer_ = nullptr;   // 1-second timer for RealTimeStats mode
+
+    // --- Section-based overlay controller ---
+    // Each module writes to its own named section; renderOverlay() joins them in order.
+    enum class OverlaySection : int {
+        Config       = 0,   // Camera config (SIYI / AI / Servo from JSON)
+        VideoStream  = 1,   // Video stream analysis (codec, resolution, etc.)
+        Bandwidth    = 2,   // Bandwidth monitoring (kbps, frames, etc.)
+        Connectivity = 3,   // Ping / connectivity status
+        _Count
+    };
+    static constexpr int kOverlaySectionCount = static_cast<int>(OverlaySection::_Count);
+    QString overlaySections_[kOverlaySectionCount];   // indexed by OverlaySection
+
+    void setOverlaySection(OverlaySection section, const QString& text);
+    void clearOverlaySection(OverlaySection section);
+    void renderOverlay();                             // schedules a coalesced render
+    void doRenderOverlay();                           // actual render (called by timer)
+    QTimer* overlayRenderTimer_ = nullptr;            // coalescing timer
+
+    // Dedicated section builders (each writes only its own section)
+    void refreshOverlayConfigSection();
+    void refreshOverlayVideoSection();
+    void refreshOverlayBandwidthSection();
+    void refreshOverlayConnectivitySection();
+
     // Video characteristics from stream analysis
     QString videoCharacteristics;
+
+    // Bandwidth monitoring (matching RtspAnalyzer/HexaRtspCompressor)
+    BandwidthStats currentBandwidthStats_;
+
+    // Stream health (data-flow check from VideoReceiver probe)
+    StreamHealthInfo currentStreamHealth_;
 
     // Right panel hover expansion
     QTimer* m_hoverTimer = nullptr;
     QPropertyAnimation* m_panelAnimation = nullptr;
     bool m_panelExpanded = false;
 
+    // Mode file watchdog and toast notification
+    QFileSystemWatcher* modeFileWatcher = nullptr;
+    QString modeFilePath;
+    QLabel* modeToastLabel = nullptr;
+    QTimer* toastTimer = nullptr;
+    QPropertyAnimation* toastFadeAnimation = nullptr;
+    void showModeToast(int mode, const QString& description);
 
+    // ROI zoom — uses 4 thin border QFrames + eventFilter for mouse
+    RoiZoomCalculator    m_roiCalc;
+    QPushButton*         m_roiToggleBtn = nullptr;
+    bool                 m_roiActive = false;
+    bool                 m_roiDragging = false;
+    QPoint               m_roiOrigin;
+    QFrame*              m_roiEdge[4] = {};  // top, bottom, left, right
+    void setupRoiOverlay();
+    void onRoiToggled(bool active);
+    void showRoiRect(const QRect &r);
+    void hideRoiRect();
+
+    QStackedWidget* mainStackedWidget = nullptr;
+    QListWidget* recordsListWidget = nullptr;
+    QTimer* recordsRefreshTimer = nullptr;
+    QPushButton* btnVideoStream = nullptr;
+    QPushButton* btnRecords = nullptr;
 };
 
 

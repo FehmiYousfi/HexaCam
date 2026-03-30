@@ -1,0 +1,22 @@
+{
+    "input_uri": "rtsp://admin:admin@192.168.1.10:554/stream1",
+    "input_use_tcp": true,
+
+    "output_address": "0.0.0.0",
+    "output_port": 8554,
+    "output_path": "/stream",
+
+    "output_codec": "copy",
+    "output_bitrate": 0,
+    "output_width": 0,
+    "output_height": 0,
+    "output_framerate": 0,
+
+    "latency": 200,
+    "drop_on_latency": true,
+    "enable_queues": true,
+    "queue_max_buffers": 3,
+    "queue_max_time_ms": 0,
+    "queue_leaky": "downstream",
+    "passthrough_codec": "h264"
+}

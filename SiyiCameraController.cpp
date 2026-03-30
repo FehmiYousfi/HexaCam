@@ -220,6 +220,33 @@ bool SiyiCameraController::setGimbalPosition(int, int)
     return false;
 }
 
+bool SiyiCameraController::setGimbalAngles(float yaw, float pitch)
+{
+    auto sp = sdkPtr;
+    if (!sp) return false;
+    bool ok = sp->set_gimbal_angles(yaw, pitch);
+    qDebug() << "[SiyiCameraController] set_gimbal_angles(" << yaw << "," << pitch << ") -> " << ok;
+    return ok;
+}
+
+std::tuple<float,float,float> SiyiCameraController::getGimbalAttitude() const
+{
+    auto sp = sdkPtr;
+    if (!sp) return {0.f, 0.f, 0.f};
+    sp->request_gimbal_attitude();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    return sp->get_gimbal_attitude();
+}
+
+bool SiyiCameraController::requestGimbalCenter()
+{
+    auto sp = sdkPtr;
+    if (!sp) return false;
+    bool ok = sp->request_gimbal_center();
+    qDebug() << "[SiyiCameraController] request_gimbal_center() -> " << ok;
+    return ok;
+}
+
 bool SiyiCameraController::setAbsoluteZoom(float zoomLevel, int speed)
 {
     (void) speed;
