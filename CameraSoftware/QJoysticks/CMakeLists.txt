@@ -9,11 +9,14 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
 
 # --- Find SDL2 ---
-find_package(SDL2 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 sdl2)
+
 if(SDL2_FOUND)
     message(STATUS "SDL2 found: ${SDL2_INCLUDE_DIRS}")
 else()
-    message(FATAL_ERROR "SDL2 not found!")
+    message(STATUS "SDL2 NOT FOUND via pkgconfig. Attempting fallback...")
+    find_package(SDL2)
 endif()
 
 # Gather source files from 'src' and 'src/QJoysticks'

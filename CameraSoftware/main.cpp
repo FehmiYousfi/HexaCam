@@ -8,7 +8,8 @@
 #include "mainwindow.h"
 #include <QFileInfo>
 #include <QCommandLineParser>
-
+#include <QMessageBox>
+#include "license_validator.h"
 
 int main(int argc, char *argv[])
 {
@@ -25,6 +26,29 @@ int main(int argc, char *argv[])
     // Set application info
     app.setApplicationName("HexaCam");
     app.setApplicationVersion("1.0");
+
+    // ==========================================
+    // LICENSE VALIDATION BLOCK
+    // ==========================================
+    QString appDirLicense = QCoreApplication::applicationDirPath() + "/license.lic";
+    QString optLicense = "/opt/myapp/license.lic";
+    QString currentLicense = "";
+
+    if (QFile::exists(appDirLicense)) {
+        currentLicense = appDirLicense;
+    } else if (QFile::exists(optLicense)) {
+        currentLicense = optLicense;
+    }
+
+    if (currentLicense.isEmpty() || !LicenseValidator::validate(currentLicense)) {
+        QMessageBox::critical(nullptr, 
+            "License Error", 
+            "A valid 'CameraSoftware' license bound to this hardware was not found, is invalid, or has expired.\n\n"
+            "Please contact support and provide them with this machine's Fingerprint to obtain a new license.");
+        
+        return -1; // Exit the application immediately
+    }
+    // ==========================================
 
     // Parse command line arguments
     QCommandLineParser parser;

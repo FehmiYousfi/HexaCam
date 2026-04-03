@@ -33,6 +33,7 @@ endif()
 # Find Qt6 required components.
 find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Core Concurrent)
 find_package(X11 REQUIRED)
+find_package(OpenSSL REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -D_DEBUG")
 
@@ -60,6 +61,8 @@ set(PROJECT_SOURCES
     ServoWorker.h   
     ping.cpp
     ping.h
+    license_validator.cpp
+    license_validator.h
 )
 
 # Create executable using Qt6.
@@ -116,6 +119,11 @@ target_link_libraries(JoystickIdentifier PRIVATE
     Qt6::Multimedia
     Qt6::MultimediaWidgets
     QJoysticks
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    crypto
+    ssl
+    /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0
     #${CMAKE_SOURCE_DIR}/thirdparty/SIYI-SDK/build/libsiyi-sdk-static.a
     siyi-sdk
     Qt6::Concurrent
