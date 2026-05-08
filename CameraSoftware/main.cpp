@@ -4,6 +4,7 @@
 #include <QVideoWidget>
 #include <QEvent>
 #include <QUrl>
+#include <QDir>
 #include "signalhandler.h"
 #include "mainwindow.h"
 #include <QFileInfo>
@@ -30,24 +31,43 @@ int main(int argc, char *argv[])
     // ==========================================
     // LICENSE VALIDATION BLOCK
     // ==========================================
+    QString homeDirLicense = QDir::homePath() + "/.licenseforge/local_license.lic";
     QString appDirLicense = QCoreApplication::applicationDirPath() + "/license.lic";
     QString optLicense = "/opt/myapp/license.lic";
     QString currentLicense = "";
 
-    if (QFile::exists(appDirLicense)) {
+    // Check in priority order: home dir, app dir, /opt
+    if (QFile::exists(homeDirLicense)) {
+        currentLicense = homeDirLicense;
+        qDebug() << "Found license in home directory:" << homeDirLicense;
+    } else if (QFile::exists(appDirLicense)) {
         currentLicense = appDirLicense;
+        qDebug() << "Found license in application directory:" << appDirLicense;
     } else if (QFile::exists(optLicense)) {
         currentLicense = optLicense;
+        qDebug() << "Found license in /opt:" << optLicense;
     }
 
     if (currentLicense.isEmpty() || !LicenseValidator::validate(currentLicense)) {
-        QMessageBox::critical(nullptr, 
-            "License Error", 
-            "A valid 'CameraSoftware' license bound to this hardware was not found, is invalid, or has expired.\n\n"
-            "Please contact support and provide them with this machine's Fingerprint to obtain a new license.");
+        QString fingerprint = LicenseValidator::getMachineFingerprint();
+        
+        QMessageBox msgBox;
+        msgBox.setIcon(QMessageBox::Critical);
+        msgBox.setWindowTitle("License Error");
+        msgBox.setText("A valid 'CameraSoftware' license bound to this hardware was not found, is invalid, or has expired.");
+        msgBox.setInformativeText("Please contact support and provide them with this machine's Fingerprint to obtain a new license.");
+        msgBox.setDetailedText(QString("Machine Fingerprint:\n%1\n\nChecked locations:\n1. %2\n2. %3\n3. %4")
+            .arg(fingerprint)
+            .arg(homeDirLicense)
+            .arg(appDirLicense)
+            .arg(optLicense));
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.exec();
         
         return -1; // Exit the application immediately
     }
+    
+    qInfo() << "License validation successful!";
     // ==========================================
 
     // Parse command line arguments

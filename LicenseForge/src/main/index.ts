@@ -60,6 +60,114 @@ app.on('window-all-closed', () => {
 })
 
 // ==========================================
+// Local Machine Fingerprint Logic
+// ==========================================
+ipcMain.handle('get-local-fingerprint', async () => {
+  try {
+    let fingerprint = ''
+    
+    if (process.platform === 'linux') {
+      // Try product_uuid first, fallback to machine-id
+      try {
+        fingerprint = fs.readFileSync('/sys/class/dmi/id/product_uuid', 'utf8').trim()
+      } catch {
+        try {
+          fingerprint = fs.readFileSync('/etc/machine-id', 'utf8').trim()
+        } catch {
+          throw new Error('Could not read machine fingerprint')
+        }
+      }
+    } else if (process.platform === 'win32') {
+      // Windows: Use machine GUID
+      const { execSync } = require('child_process')
+      fingerprint = execSync('wmic csproduct get uuid', { encoding: 'utf8' })
+        .split('\n')[1]
+        .trim()
+    } else if (process.platform === 'darwin') {
+      // macOS: Use hardware UUID
+      const { execSync } = require('child_process')
+      fingerprint = execSync('ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID', { encoding: 'utf8' })
+        .split('=')[1]
+        .trim()
+        .replace(/"/g, '')
+    }
+    
+    if (!fingerprint) {
+      throw new Error('Could not determine machine fingerprint')
+    }
+    
+    return { success: true, fingerprint }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+// ==========================================
+// Local License Management
+// ==========================================
+const getLocalLicensePath = () => {
+  const homeDir = os.homedir()
+  const licenseDir = join(homeDir, '.licenseforge')
+  if (!fs.existsSync(licenseDir)) {
+    fs.mkdirSync(licenseDir, { recursive: true })
+  }
+  return join(licenseDir, 'local_license.lic')
+}
+
+ipcMain.handle('install-local-license', async (_, licenseData) => {
+  try {
+    const licensePath = getLocalLicensePath()
+    fs.writeFileSync(licensePath, Buffer.from(licenseData, 'base64'))
+    return { success: true, path: licensePath }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('remove-local-license', async () => {
+  try {
+    const licensePath = getLocalLicensePath()
+    if (fs.existsSync(licensePath)) {
+      fs.unlinkSync(licensePath)
+      return { success: true, message: 'License removed successfully' }
+    } else {
+      return { success: false, error: 'No license file found' }
+    }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('check-local-license', async () => {
+  try {
+    const licensePath = getLocalLicensePath()
+    const exists = fs.existsSync(licensePath)
+    
+    if (!exists) {
+      return { success: true, installed: false }
+    }
+    
+    // Read and parse license to show details
+    const licenseBuffer = fs.readFileSync(licensePath)
+    const magicBytes = licenseBuffer.slice(0, 4).toString('utf8')
+    
+    if (magicBytes !== 'LICF') {
+      return { success: true, installed: true, valid: false, error: 'Invalid license format' }
+    }
+    
+    return { 
+      success: true, 
+      installed: true, 
+      valid: true,
+      path: licensePath,
+      size: licenseBuffer.length
+    }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+// ==========================================
 // SSH Fetch Fingerprint Logic
 // ==========================================
 ipcMain.handle('ssh-fetch-fingerprint', async (_, config) => {

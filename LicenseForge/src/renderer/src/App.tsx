@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,11 +7,12 @@ import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Toaster } from '@/components/ui/toaster'
 import { useToast } from '@/hooks/use-toast'
 import { format } from 'date-fns'
-import { CalendarIcon, CheckCircle2, AlertCircle, Server, ShieldCheck, Key } from 'lucide-react'
+import { CalendarIcon, CheckCircle2, AlertCircle, Server, ShieldCheck, Key, Monitor, Download, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default function App() {
@@ -26,16 +27,121 @@ export default function App() {
   const [autoInstall, setAutoInstall] = useState(false)
   const [isFetching, setIsFetching] = useState(false)
 
+  // Local Machine State
+  const [localFingerprint, setLocalFingerprint] = useState('')
+  const [localLicenseStatus, setLocalLicenseStatus] = useState<{
+    installed: boolean;
+    valid?: boolean;
+    path?: string;
+    size?: number;
+  } | null>(null)
+  const [isLocalMode, setIsLocalMode] = useState(false)
+
   // Form State
   const [fingerprint, setFingerprint] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [customerEmail, setCustomerEmail] = useState('')
-  const [licenseType] = useState('CameraSoftware')
+  const [licenseType, setLicenseType] = useState('CameraSoftware')
   const [expiry, setExpiry] = useState<Date | undefined>(undefined)
   
   // Result State
   const [generatedLicense, setGeneratedLicense] = useState<{ path: string; content: string; base64?: string; sshStatus?: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  
+  const checkLocalLicense = async () => {
+    try {
+      const result = await window.api.checkLocalLicense()
+      if (result.success) {
+        setLocalLicenseStatus({
+          installed: result.installed,
+          valid: result.valid,
+          path: result.path,
+          size: result.size
+        })
+      }
+    } catch (e: any) {
+      console.error('Failed to check local license:', e)
+    }
+  }
+
+  const handleGetLocalFingerprint = async () => {
+    try {
+      const result = await window.api.getLocalFingerprint()
+      if (result.success && result.fingerprint) {
+        setLocalFingerprint(result.fingerprint)
+        setFingerprint(result.fingerprint)
+        setIsLocalMode(true)
+        toast({ 
+          title: "Local Fingerprint Retrieved", 
+          description: "This PC's hardware UUID has been loaded." 
+        })
+      } else {
+        toast({ 
+          title: "Failed to Get Fingerprint", 
+          description: result.error || "Unknown error", 
+          variant: "destructive" 
+        })
+      }
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" })
+    }
+  }
+
+  const handleInstallLocalLicense = async () => {
+    if (!generatedLicense?.base64) {
+      toast({
+        title: "No License Generated",
+        description: "Please generate a license first before installing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const result = await window.api.installLocalLicense(generatedLicense.base64)
+      if (result.success) {
+        toast({
+          title: "License Installed",
+          description: `License installed at ${result.path}`
+        })
+        await checkLocalLicense()
+      } else {
+        toast({
+          title: "Installation Failed",
+          description: result.error || "Unknown error",
+          variant: "destructive"
+        })
+      }
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" })
+    }
+  }
+
+  const handleRemoveLocalLicense = async () => {
+    try {
+      const result = await window.api.removeLocalLicense()
+      if (result.success) {
+        toast({
+          title: "License Removed",
+          description: result.message || "License has been removed from this PC"
+        })
+        await checkLocalLicense()
+      } else {
+        toast({
+          title: "Removal Failed",
+          description: result.error || "Unknown error",
+          variant: "destructive"
+        })
+      }
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" })
+    }
+  }
+
+  // Check local license on mount
+  useEffect(() => {
+    checkLocalLicense()
+  }, [])
   
   const handleFetchFingerprint = async () => {
     if (!sshHost || !sshUser || !sshPassword) {
@@ -143,6 +249,107 @@ export default function App() {
         <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-6 items-start">
           
           <div className="space-y-6">
+            {/* Local Machine Card */}
+            <Card className="bg-slate-900 border-slate-800 text-white shadow-xl">
+              <CardHeader className="pb-3 border-b border-slate-800">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Monitor className="w-5 h-5 text-green-400" />
+                  This PC (Local Machine)
+                </CardTitle>
+                <CardDescription className="text-slate-400">
+                  Generate and manage license for this computer.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-4">
+                <div className="space-y-2">
+                  <Label>Local Machine Fingerprint</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      readOnly
+                      placeholder="Click button to retrieve..."
+                      className="font-mono text-sm bg-slate-950 border-slate-700 text-slate-300"
+                      value={localFingerprint}
+                    />
+                    <Button
+                      variant="secondary"
+                      className="bg-slate-800 hover:bg-slate-700 text-white flex items-center gap-2 shrink-0"
+                      onClick={handleGetLocalFingerprint}
+                    >
+                      <Key className="w-4 h-4" />
+                      Get
+                    </Button>
+                  </div>
+                </div>
+
+                {localLicenseStatus && (
+                  <div className="pt-2 border-t border-slate-800">
+                    <Label className="text-xs text-slate-400 uppercase tracking-wider mb-2 block">
+                      License Status
+                    </Label>
+                    {localLicenseStatus.installed ? (
+                      <div className="space-y-2">
+                        <div className={cn(
+                          "text-sm font-medium px-3 py-2 rounded flex items-center gap-2",
+                          localLicenseStatus.valid ? "bg-green-950/50 text-green-400" : "bg-red-950/50 text-red-400"
+                        )}>
+                          {localLicenseStatus.valid ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4" />
+                              License Installed
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className="w-4 h-4" />
+                              Invalid License Format
+                            </>
+                          )}
+                        </div>
+                        {localLicenseStatus.path && (
+                          <div className="text-xs text-slate-400 break-all">
+                            Path: {localLicenseStatus.path}
+                          </div>
+                        )}
+                        {localLicenseStatus.size && (
+                          <div className="text-xs text-slate-400">
+                            Size: {localLicenseStatus.size} bytes
+                          </div>
+                        )}
+                        <div className="flex gap-2 pt-2">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="flex-1 flex items-center gap-2"
+                            onClick={handleRemoveLocalLicense}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Remove License
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium px-3 py-2 rounded flex items-center gap-2 bg-slate-950/50 text-slate-400">
+                          <AlertCircle className="w-4 h-4" />
+                          No License Installed
+                        </div>
+                        {generatedLicense && isLocalMode && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            className="w-full bg-green-600 hover:bg-green-700 flex items-center gap-2"
+                            onClick={handleInstallLocalLicense}
+                          >
+                            <Download className="w-4 h-4" />
+                            Install Generated License
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Target Machine SSH Card */}
             <Card className="bg-slate-900 border-slate-800 text-white shadow-xl">
               <CardHeader className="pb-3 border-b border-slate-800">
@@ -278,12 +485,19 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="type">License Type</Label>
-                    <Input
-                      id="type"
-                      readOnly
-                      className="bg-slate-950 border-slate-700 text-slate-400 cursor-not-allowed"
-                      value={licenseType}
-                    />
+                    <Select value={licenseType} onValueChange={setLicenseType}>
+                      <SelectTrigger className="bg-slate-950 border-slate-700 text-white">
+                        <SelectValue placeholder="Select license type" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-700">
+                        <SelectItem value="CameraSoftware" className="text-white hover:bg-slate-800">
+                          CameraSoftware
+                        </SelectItem>
+                        <SelectItem value="GcontrolStation" className="text-white hover:bg-slate-800">
+                          GcontrolStation
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-2">
